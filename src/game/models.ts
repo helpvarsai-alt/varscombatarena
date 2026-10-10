@@ -98,8 +98,8 @@ export const LOOKS: Record<string, FighterLook> = {
   },
   // shadow — twin knives, no cape
   nyx: { model: "kk_Rogue", keep: ["Knife", "Knife_Offhand"], tint: 0.36 },
-  // the flowing one — same plate as Terra but stripped, caped, lighter
-  tide: { model: "kk_Knight", keep: ["Knight_Cape"], tint: 0.3 },
+  // the flowing one — hooded rogue silhouette, cape, no armor
+  tide: { model: "kk_Rogue_Hooded", keep: ["Rogue_Cape"], tint: 0.3 },
 };
 
 export function lookFor(theme: CharacterTheme): FighterLook {

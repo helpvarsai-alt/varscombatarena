@@ -913,6 +913,9 @@ export class ThreeRenderer {
   private models: (FighterModel | null)[] = [null, null];
   /** bumped whenever a slot's character changes, so late loads are discarded */
   private modelToken = [0, 0];
+  private modelLoadStart = [0, 0];
+  private modelLoading = [false, false];
+  private modelLoadBadges: (THREE.Mesh | null)[] = [null, null];
   private disposables: Disposable[] = [];
   private camX = 600;
   private camZ = 1200;
@@ -1177,6 +1180,12 @@ export class ThreeRenderer {
     }
     for (const [, g] of this.projMeshes) this.disposeGroup(g);
     for (const m of this.models) if (m) disposeFighterModel(m);
+    for (const b of this.modelLoadBadges) {
+      if (b) {
+        b.geometry.dispose();
+        (b.material as THREE.Material).dispose();
+      }
+    }
     this.renderer.dispose();
     this.canvas.remove();
   }
@@ -1399,6 +1408,7 @@ export class ThreeRenderer {
     }
 
     this.syncProjectiles(world, timeMs, dtS);
+    this.syncModelLoadBadges(timeMs);
     this.renderer.render(this.scene, this.camera);
     this.renderer.info.reset();
   }
@@ -1490,14 +1500,20 @@ export class ThreeRenderer {
     const theme = getCharacter(themeId);
     const spec = MODELS[lookFor(theme).model];
     const token = ++this.modelToken[i];
+    this.modelLoading[i] = true;
+    this.modelLoadStart[i] = performance.now();
     loadFighterModel(theme, spec, i)
       .then((model) => {
         if (this.modelToken[i] !== token) return;
         this.models[i] = model;
         this.rigs[i].root.add(model.root);
+        this.modelLoading[i] = false;
+        this.modelLoadStart[i] = 0;
       })
       .catch(() => {
         /* offline or a bad file: keep the procedural rig */
+        this.modelLoading[i] = false;
+        this.modelLoadStart[i] = 0;
       });
   }
 
@@ -1609,6 +1625,32 @@ export class ThreeRenderer {
   }
 
   /* ------------------------------- projectiles ----------------------------- */
+
+  private syncModelLoadBadges(timeMs: number) {
+    for (let i = 0; i < 2; i++) {
+      const loading = this.modelLoading[i];
+      if (!loading && this.modelLoadStart[i] === 0) continue;
+      if (!loading) {
+        this.modelLoadStart[i] = 0;
+        const badge = this.modelLoadBadges[i];
+        if (badge) {
+          this.scene.remove(badge);
+          this.modelLoadBadges[i] = null;
+        }
+        continue;
+      }
+      // show badge while loading
+      const badge = this.modelLoadBadges[i];
+      if (!badge) continue;
+      const elapsed = timeMs - this.modelLoadStart[i];
+      const pulse = 0.7 + Math.sin(elapsed * 0.008) * 0.3;
+      (badge.material as THREE.MeshBasicMaterial).opacity = pulse;
+      // position above fighter
+      const f = this.rigs[i];
+      badge.position.set(f.root.position.x, 180, f.root.position.z);
+      badge.lookAt(this.camera.position);
+    }
+  }
 
   private syncProjectiles(world: World, timeMs: number, dtS: number) {
     const live = new Set<number>();

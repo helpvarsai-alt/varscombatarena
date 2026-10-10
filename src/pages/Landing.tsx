@@ -5,7 +5,7 @@ import { CHARACTERS } from "@/game/characters";
 import { MOVES } from "@/game/combos";
 
 /**
- * CombatVerse — landing. A neon rooftop fighting game you can play with a
+ * VARS Combat Arena — landing. A neon rooftop fighting game you can play with a
  * friend anywhere via a room code, or warm up against the AI. 2D & 3D.
  */
 export default function Landing() {
@@ -15,10 +15,10 @@ export default function Landing() {
       <header className="mx-auto flex max-w-6xl items-center justify-between px-4 py-5">
         <div className="flex items-center gap-2">
           <span className="grid size-9 place-items-center rounded-lg bg-gradient-to-br from-[#4be3ff] to-[#ff4fa3] font-black text-[#070a18]">
-            CV
+            V
           </span>
           <span className="font-black tracking-widest text-[#4be3ff]">
-            COMBAT VERSE
+            VARS COMBAT ARENA
           </span>
         </div>
         <nav className="flex items-center gap-4 text-sm">
@@ -42,19 +42,17 @@ export default function Landing() {
         {/* glow field */}
         <div className="pointer-events-none absolute -top-24 left-1/2 h-[420px] w-[820px] -translate-x-1/2 rounded-full bg-[#ff4fa3]/20 blur-[120px]" />
         <div className="pointer-events-none absolute top-32 -left-20 h-72 w-72 rounded-full bg-[#4be3ff]/15 blur-[90px]" />
-        <div className="pointer-events-none absolute top-48 -right-16 h-72 w-72 rounded-full bg-[#ffd166]/10 blur-[90px]" />
-
-        <div className="relative mx-auto max-w-5xl px-4 pb-16 pt-14 text-center">
+        <div className="pointer-events-none absolute top-48 -right-16 h-72 w-72 rounded-full bg-[#3c1f45]/10 blur-[90px]" /><div className="relative mx-auto max-w-5xl px-4 pb-16 pt-14 text-center">
           <motion.div
             initial={{ opacity: 0, y: 18 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.55 }}
           >
             <span className="inline-flex items-center gap-2 rounded-full border border-[#4be3ff]/40 bg-[#4be3ff]/10 px-4 py-1.5 text-xs font-bold tracking-[0.2em] text-[#4be3ff]">
-              <Zap className="size-3.5" /> 2D &amp; 3D · MOBILE-FIRST · CROSS-PLATFORM
+              <Zap className="size-3.5" /> VARS ARENA · MOBILE-FIRST · CROSS-PLATFORM
             </span>
             <h1 className="mt-6 text-5xl font-black leading-[0.95] tracking-tight sm:text-7xl md:text-8xl">
-              COMBAT
+              VARS
               <span
                 className="block text-transparent"
                 style={{
@@ -64,14 +62,14 @@ export default function Landing() {
                   backgroundClip: "text",
                 }}
               >
-                RUMBLE
+                ARENA
               </span>
-            </h1>
+            </h1 >
             <p className="mx-auto mt-5 max-w-2xl text-base text-white/60 sm:text-lg">
               Six fighters. Twenty combos. One room code — challenge a friend in
               America, India, or anywhere else on the planet, or square up against
               the AI. Same moves for everyone: only your hands decide.
-            </p>
+            </p >
           </motion.div>
 
           <motion.div
@@ -146,7 +144,7 @@ export default function Landing() {
           />
           <Feature
             icon={<Smartphone className="size-5" />}
-            tone="#ffd166"
+            tone="#3ef0c5"
             title="Silky on mobile"
             body="Fixed 60Hz simulation with interpolated rendering, a thumb-sized stick, three big buttons and zero account signup. Landscape or portrait."
           />
@@ -157,7 +155,7 @@ export default function Landing() {
       <section id="roster" className="mx-auto max-w-6xl px-4 py-10">
         <SectionTitle
           kicker="THE ROSTER"
-          title="SIX FIGHTERS, ONE MOVE LIST"
+          title="SIX FIGHTERS. ONE MOVE LIST."
           sub="Every character shares all 20 combos — what changes is the animation, aura and hit effects. Pick the vibe you fight best with."
         />
         <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -173,12 +171,12 @@ export default function Landing() {
               <div
                 className="mb-3 h-24 w-full rounded-xl"
                 style={{
-                  background: `radial-gradient(circle at 32% 28%, ${c.accent}, ${c.aura} 55%, #0b1020 100%)`,
+                  background: `radial-gradient(circle at 32% 28%, ${c.accent}, ${c.aura} 55%, #04050c 100%)`,
                   boxShadow: `inset 0 -24px 40px -24px rgba(0,0,0,0.7)`,
                 }}
-              />
-              <div className="absolute -right-6 -top-6 size-20 rounded-full opacity-0 blur-2xl transition group-hover:opacity-60"
-                style={{ background: c.aura }}
+              />              <div
+                className="absolute -right-6 -top-6 size-20 rounded-full opacity-0 blur-2xl transition group-hover:opacity-60"
+                style={{ background: c.aura, boxShadow: `0 0 40px -8px ${c.aura}` }}
               />
               <div className="font-black tracking-wider">{c.name}</div>
               <div className="mt-0.5 text-[11px] leading-snug text-white/45">
@@ -265,7 +263,7 @@ export default function Landing() {
       </section>
 
       <footer className="border-t border-white/10 py-8 text-center text-xs text-white/35">
-        COMBAT VERSE · 2D/3D cross-platform fighter · built for thumbs &amp;
+        VARS COMBAT ARENA · 2D/3D cross-platform fighter · built for thumbs &amp;
         keyboards
       </footer>
     </div>
