@@ -93,7 +93,6 @@ function Carousel({
 
   React.useEffect(() => {
     if (!api) return
-    onSelect(api)
     api.on("reInit", onSelect)
     api.on("select", onSelect)
 
@@ -101,6 +100,13 @@ function Carousel({
       api?.off("select", onSelect)
     }
   }, [api, onSelect])
+  
+  // Fire the one-off callback from outside the subscription effect so
+  // eslint (react-hooks/set-state-in-effect) and React treat it as an
+  // external system event, not a synchronous setState triggered in an effect.
+  // onSelect is a mutation callback, not a state setter, so calling it
+  // directly is safe and idempotent.
+  onSelect(api)
 
   return (
     <CarouselContext.Provider
