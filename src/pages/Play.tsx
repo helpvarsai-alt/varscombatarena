@@ -91,31 +91,25 @@ export default function Play() {
 
   return (
     <div className="min-h-dvh bg-[#070a18] text-white">
-      {/* top bar */}
-      <header className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 pt-6">
-        <button
-          onClick={() => navigate("/")}
-          className="flex items-center gap-2 text-left"
-          aria-label="Back to home"
-        >
-          <span className="grid size-9 place-items-center rounded-lg bg-gradient-to-br from-[#4be3ff] to-[#ff4fa3] font-black text-[#070a18]">
-            CV
-          </span>
-          <span className="font-black tracking-widest text-[#4be3ff]">COMBAT VERSE</span>
-        </button>
-        <div className="flex items-center gap-2">
-          <span className="hidden text-xs text-white/40 sm:block">YOUR NAME</span>
-          <Input
-            value={name}
-            onChange={(e) => saveName(e.target.value)}
-            maxLength={20}
-            className="w-32 border-white/15 bg-white/5 text-white placeholder:text-white/30 sm:w-40"
-            placeholder="Fighter"
-          />
-        </div>
-      </header>
+      {/* friendly name field sits inside the cockpit, not the chrome */}
+      <div className="mx-auto max-w-md px-4 pt-6">
+        <label htmlFor="player-name" className="text-xs font-bold tracking-[0.2em] text-white/35">
+          FIGHTER NAME
+        </label>
+        <Input
+          id="player-name"
+          value={name}
+          onChange={(e) => saveName(e.target.value)}
+          maxLength={20}
+          className="mt-2 w-full border-white/15 bg-white/5 text-white placeholder:text-white/30"
+          placeholder="Who's fighting?"
+        />
+        <p className="mt-1.5 text-[11px] leading-normal text-white/30">
+          No account — this is just how your friends see you on the rooftop.
+        </p>
+      </div>
 
-      <main className="mx-auto max-w-6xl px-4 pb-24 pt-8">
+      <main className="mx-auto max-w-6xl px-4 pb-16 pt-4">
         <motion.h1
           initial={{ opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
@@ -175,17 +169,13 @@ export default function Play() {
         <div className="mt-8 inline-flex rounded-xl border border-white/10 bg-white/5 p-1">
           <button
             onClick={() => setTab("cpu")}
-            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold transition ${
-              tab === "cpu" ? "bg-[#4be3ff] text-[#070a18]" : "text-white/60 hover:text-white"
-            }`}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold transition ${tab === "cpu" ? "bg-[#4be3ff] text-[#070a18]" : "text-white/60 hover:text-white"}`}
           >
             <Gamepad2 className="size-4" /> VS CPU
           </button>
           <button
             onClick={() => setTab("online")}
-            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold transition ${
-              tab === "online" ? "bg-[#ff4fa3] text-white" : "text-white/60 hover:text-white"
-            }`}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold transition ${tab === "online" ? "bg-[#ff4fa3] text-white" : "text-white/60 hover:text-white"}`}
           >
             <Globe2 className="size-4" /> ONLINE
           </button>
@@ -208,11 +198,7 @@ export default function Play() {
                 <button
                   key={d}
                   onClick={() => setDiff(d)}
-                  className={`rounded-full border px-4 py-1.5 text-xs font-bold uppercase tracking-widest transition ${
-                    diff === d
-                      ? "border-[#4be3ff] bg-[#4be3ff]/15 text-[#4be3ff]"
-                      : "border-white/15 text-white/50 hover:border-white/40"
-                  }`}
+                  className={`rounded-full border px-4 py-1.5 text-xs font-bold uppercase tracking-widest transition ${diff === d ? "border-[#4be3ff] bg-[#4be3ff]/15 text-[#4be3ff]" : "border-white/15 text-white/50 hover:border-white/40"}`}
                 >
                   {d}
                 </button>

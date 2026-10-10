@@ -3,17 +3,17 @@ import { Toaster } from "@/components/ui/sonner";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ConvexReactClient } from "convex/react";
-import React, { StrictMode, useEffect, lazy, Suspense } from "react";
+import React, { StrictMode, Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";
 import {
   BrowserRouter,
   Navigate,
   Route,
   Routes,
-  useLocation,
 } from "react-router";
 import "./index.css";
 import RotateGate from "./components/RotateGate";
+import { GameBar } from "./components/GameBar";
 
 // Lazy load route components for better code splitting
 const Landing = lazy(() => import("./pages/Landing.tsx"));
@@ -93,28 +93,7 @@ class RootErrorBoundary extends React.Component<
 
 const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL as string);
 
-function RouteSyncer() {
-  const location = useLocation();
-  useEffect(() => {
-    window.parent.postMessage(
-      { type: "iframe-route-change", path: location.pathname },
-      "*",
-    );
-  }, [location.pathname]);
 
-  useEffect(() => {
-    function handleMessage(event: MessageEvent) {
-      if (event.data?.type === "navigate") {
-        if (event.data.direction === "back") window.history.back();
-        if (event.data.direction === "forward") window.history.forward();
-      }
-    }
-    window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
-  }, []);
-
-  return null;
-}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -124,7 +103,7 @@ createRoot(document.getElementById("root")!).render(
       </ToolbarErrorBoundary>
       <ConvexAuthProvider client={convex}>
         <BrowserRouter>
-          <RouteSyncer />
+          <GameBar />
           <RotateGate />
           <Suspense fallback={<RouteLoading />}>
             <Routes>
