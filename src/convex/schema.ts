@@ -38,6 +38,33 @@ const schema = defineSchema(
     //   ...
     //   // table fields
     // }).index("by_field", ["field"])
+
+    // Online match rooms. Players are anonymous (device id) — no sign-in.
+    // Snapshots are compact JSON strings pushed at ~10Hz per player so the
+    // reactive query streams opponent state across regions with low overhead.
+    rooms: defineTable({
+      code: v.string(),
+      hostId: v.string(),
+      hostName: v.string(),
+      hostChar: v.string(),
+      hostSnap: v.optional(v.string()),
+      guestId: v.optional(v.string()),
+      guestName: v.optional(v.string()),
+      guestChar: v.optional(v.string()),
+      guestSnap: v.optional(v.string()),
+      status: v.union(
+        v.literal("waiting"),
+        v.literal("playing"),
+        v.literal("finished"),
+      ),
+      startedAt: v.optional(v.number()),
+      winner: v.optional(v.string()),
+      endReason: v.optional(v.string()),
+      createdAt: v.number(),
+      finishedAt: v.optional(v.number()),
+    })
+      .index("by_code", ["code"])
+      .index("by_created", ["createdAt"]),
   },
   {
     schemaValidation: false,
