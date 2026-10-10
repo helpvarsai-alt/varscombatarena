@@ -10,7 +10,7 @@ import { MOVES } from "@/game/combos";
  */
 export default function Landing() {
   return (
-    <div className="min-h-screen bg-[#070a18] text-white">
+    <div className="min-h-dvh bg-[#070a18] text-white">
       {/* ================================ NAV ================================ */}
       <header className="mx-auto flex max-w-6xl items-center justify-between px-4 py-5">
         <div className="flex items-center gap-2">

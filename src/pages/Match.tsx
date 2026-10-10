@@ -205,7 +205,7 @@ export default function Match() {
 
 function CenterCard({ children }: { children: React.ReactNode }) {
   return (
-    <div className="grid min-h-screen place-items-center bg-[#070a18] p-6 text-center text-white">
+    <div className="grid min-h-dvh place-items-center bg-[#070a18] p-6 text-center text-white">
       <div>{children}</div>
     </div>
   );
@@ -243,7 +243,7 @@ function WaitingLobby({
   );
 
   return (
-    <div className="min-h-screen bg-[#070a18] text-white">
+    <div className="min-h-dvh bg-[#070a18] text-white">
       <div className="mx-auto max-w-3xl px-4 py-8">
         <div className="flex items-center justify-between">
           <span className="font-black tracking-widest text-[#4be3ff]">
@@ -410,6 +410,17 @@ function FightScreen(props: FightProps) {
   const sendSnap = useMutation(api.rooms.sendSnap);
   const finishMatch = useMutation(api.rooms.finishMatch);
 
+  // Best-effort: the site is landscape-only on touch (see RotateGate), and
+  // Android Chrome can additionally *pin* landscape while fullscreen. iOS has
+  // no such API — it simply follows the device. Failures are expected, and
+  // `lock` is a Chromium extension missing from lib.dom (hence the local type).
+  useEffect(() => {
+    const so = window.screen.orientation as unknown as {
+      lock?: (orientation: string) => Promise<void>;
+    } | null;
+    so?.lock?.("landscape")?.catch(() => {});
+  }, []);
+
   // latest props for the long-lived engine
   const propsRef = useRef(props);
   useEffect(() => {
@@ -568,9 +579,12 @@ function FightScreen(props: FightProps) {
   return (
     <div className="fixed inset-0 flex flex-col overflow-hidden bg-[#070a18] text-white select-none">
       {/* ============================= arena ============================= */}
-      <div ref={containerRef} className="relative flex-1 overflow-hidden">
+      <div
+        ref={containerRef}
+        className="relative flex-1 overflow-hidden touch-none"
+      >
         {/* ---------------------------- HUD ---------------------------- */}
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-20 px-2 pt-2 sm:px-4 sm:pt-3">
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-20 ps-[max(env(safe-area-inset-left),0.5rem)] pe-[max(env(safe-area-inset-right),0.5rem)] pt-[max(env(safe-area-inset-top),0.5rem)] sm:ps-[max(env(safe-area-inset-left),1rem)] sm:pe-[max(env(safe-area-inset-right),1rem)] sm:pt-[max(env(safe-area-inset-top),0.75rem)]">
           <div className="flex items-start gap-2">
             {/* left fighter */}
             <div className="min-w-0 flex-1">
@@ -707,8 +721,48 @@ function FightScreen(props: FightProps) {
           </div>
         ) : null}
 
+        {/* touch controls float over the arena so the fight is full-bleed */}
+        {isTouch ? (
+          <>
+            <Joystick onStick={(x, y) => input()?.setStick(x, y)} />
+            <div
+              className="absolute right-4 bottom-4 z-30 flex items-end gap-3"
+              style={{
+                right: "max(1rem, env(safe-area-inset-right))",
+                bottom: "max(1rem, env(safe-area-inset-bottom))",
+              }}
+            >
+              <ActionBtn
+                label="L"
+                hint="light"
+                color="#4be3ff"
+                onPress={() => input()?.press("L")}
+              />
+              <ActionBtn
+                label="H"
+                hint="heavy"
+                color="#ff4fa3"
+                onPress={() => input()?.press("H")}
+              />
+              <ActionBtn
+                label="S"
+                hint="special"
+                color="#ffd166"
+                onPress={() => input()?.press("S")}
+                big
+              />
+            </div>
+            <div className="pointer-events-none absolute bottom-14 left-1/2 z-30 hidden -translate-x-1/2 whitespace-nowrap text-[10px] text-white/30 sm:block">
+              {MOVES[tipIdx].name}: {MOVES[tipIdx].hint}
+            </div>
+          </>
+        ) : null}
+
         {/* toolbar */}
-        <div className="absolute bottom-2 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/15 bg-black/60 px-2 py-1.5 backdrop-blur">
+        <div
+          className="absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/15 bg-black/60 px-2 py-1.5 backdrop-blur"
+          style={{ bottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+        >
           <button
             onClick={() => {
               const next: Renderer2D3D = kind === "3d" ? "2d" : "3d";
@@ -865,36 +919,8 @@ function FightScreen(props: FightProps) {
         ) : null}
       </div>
 
-      {/* ============================ controls ============================ */}
-      {isTouch ? (
-        <div className="relative z-30 h-[36vh] max-h-64 min-h-44 touch-none">
-          <Joystick onStick={(x, y) => input()?.setStick(x, y)} />
-          <div className="absolute bottom-4 right-4 flex items-end gap-3">
-            <ActionBtn
-              label="L"
-              hint="light"
-              color="#4be3ff"
-              onPress={() => input()?.press("L")}
-            />
-            <ActionBtn
-              label="H"
-              hint="heavy"
-              color="#ff4fa3"
-              onPress={() => input()?.press("H")}
-            />
-            <ActionBtn
-              label="S"
-              hint="special"
-              color="#ffd166"
-              onPress={() => input()?.press("S")}
-              big
-            />
-          </div>
-          <div className="pointer-events-none absolute bottom-1 left-1/2 hidden -translate-x-1/2 text-[10px] text-white/30 sm:block">
-            {MOVES[tipIdx].name}: {MOVES[tipIdx].hint}
-          </div>
-        </div>
-      ) : (
+      {/* ==================== keyboard hints (desktop) ==================== */}
+      {!isTouch ? (
         <div className="relative z-30 flex h-14 items-center justify-center gap-3 text-[11px] text-white/45">
           <Key k="W A S D" /> move / jump / crouch
           <span className="text-white/20">·</span>
@@ -902,7 +928,7 @@ function FightScreen(props: FightProps) {
           <span className="text-white/20">·</span>
           <span className="text-white/30">{MOVES[tipIdx].hint}</span>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -981,8 +1007,12 @@ function Joystick({ onStick }: { onStick: (x: number, y: number) => void }) {
       }}
       onPointerUp={end}
       onPointerCancel={end}
-      className="absolute bottom-4 left-4 grid size-36 touch-none place-items-center rounded-full border border-white/20 bg-white/5 backdrop-blur-sm"
-      style={{ touchAction: "none" }}
+      className="absolute bottom-4 left-4 z-30 grid size-36 touch-none place-items-center rounded-full border border-white/20 bg-white/5 backdrop-blur-sm"
+      style={{
+        touchAction: "none",
+        left: "max(1rem, env(safe-area-inset-left))",
+        bottom: "max(1rem, env(safe-area-inset-bottom))",
+      }}
       aria-label="Movement stick"
     >
       {/* direction ticks */}

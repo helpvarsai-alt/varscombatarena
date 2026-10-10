@@ -90,7 +90,7 @@ export default function Play() {
   };
 
   return (
-    <div className="min-h-screen bg-[#070a18] text-white">
+    <div className="min-h-dvh bg-[#070a18] text-white">
       {/* top bar */}
       <header className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 pt-6">
         <button

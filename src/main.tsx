@@ -1,12 +1,19 @@
-import '@vly-ai/integrations';
+import "@vly-ai/integrations";
 import { Toaster } from "@/components/ui/sonner";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ConvexReactClient } from "convex/react";
 import React, { StrictMode, useEffect, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router";
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router";
 import "./index.css";
+import RotateGate from "./components/RotateGate";
 
 // Lazy load route components for better code splitting
 const Landing = lazy(() => import("./pages/Landing.tsx"));
@@ -14,11 +21,16 @@ const Play = lazy(() => import("./pages/Play.tsx"));
 const Match = lazy(() => import("./pages/Match.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
-// Simple loading fallback for route transitions
+// Branded loading fallback for route transitions (matches the game's dark theme)
 function RouteLoading() {
   return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="animate-pulse text-muted-foreground">Loading...</div>
+    <div className="min-h-dvh flex flex-col items-center justify-center gap-4 bg-[#070a18]">
+      <span className="grid size-10 animate-pulse place-items-center rounded-xl bg-gradient-to-br from-[#4be3ff] to-[#ff4fa3] font-black text-[#070a18]">
+        CV
+      </span>
+      <p className="text-[11px] font-bold tracking-[0.35em] text-white/40">
+        LOADING…
+      </p>
     </div>
   );
 }
@@ -81,8 +93,6 @@ class RootErrorBoundary extends React.Component<
 
 const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL as string);
 
-
-
 function RouteSyncer() {
   const location = useLocation();
   useEffect(() => {
@@ -106,7 +116,6 @@ function RouteSyncer() {
   return null;
 }
 
-
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <RootErrorBoundary>
@@ -116,6 +125,7 @@ createRoot(document.getElementById("root")!).render(
       <ConvexAuthProvider client={convex}>
         <BrowserRouter>
           <RouteSyncer />
+          <RotateGate />
           <Suspense fallback={<RouteLoading />}>
             <Routes>
               <Route path="/" element={<Landing />} />
@@ -124,7 +134,10 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/match/:code" element={<Match />} />
               {/* No sign-in required: legacy auth/dashboard routes lead into the game */}
               <Route path="/auth" element={<Navigate to="/play" replace />} />
-              <Route path="/dashboard" element={<Navigate to="/play" replace />} />
+              <Route
+                path="/dashboard"
+                element={<Navigate to="/play" replace />}
+              />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
