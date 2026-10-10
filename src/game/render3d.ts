@@ -7,15 +7,26 @@ import {
   type Proportions,
 } from "./characters";
 import { baseStance, rigPoseFor, type Pose3 } from "./animation";
+import {
+  disposeFighterModel,
+  loadFighterModel,
+  lookFor,
+  modelsAvailable,
+  MODELS,
+  updateFighterModel,
+  type FighterModel,
+} from "./models";
 import { STAGE, type Fighter, type FxEvent, type World } from "./sim";
 
 /* ========================================================================== */
 /*  three.js fight renderer                                                   */
 /*                                                                            */
-/*  A real humanoid rig: pelvis / chest / head, two arms and two legs, every   */
-/*  joint driven on three axes by the keyframe animation system. All geometry  */
-/*  is procedural and built once at match start, so a phone gets detailed      */
-/*  fighters with no downloads, loaders or model files.                        */
+/*  Two layers of fighters. A procedural humanoid rig (pelvis / chest / head,   */
+/*  two arms and two legs, every joint driven on three axes by the keyframe     */
+/*  animation system) is built instantly at match start, so the first frame is  */
+/*  playable and the game still works if the model files never arrive. Behind   */
+/*  it, a rigged skinned model (41 bones, 76 clips) loads and takes over,       */
+/*  driving the same clip-per-combo mapping through an AnimationMixer.          */
 /*                                                                            */
 /*  The rig itself (buildFighterRig / stampFighterStyle / applyRigPose) is     */
 /*  pure three.js object-graph code with no WebGL, so its silhouette can be    */
@@ -899,6 +910,9 @@ export class ThreeRenderer {
   private waves: Shockwave[] = [];
   private flashes: Flash[] = [];
   private projMeshes = new Map<number, THREE.Group>();
+  private models: (FighterModel | null)[] = [null, null];
+  /** bumped whenever a slot's character changes, so late loads are discarded */
+  private modelToken = [0, 0];
   private disposables: Disposable[] = [];
   private camX = 600;
   private camZ = 1200;
@@ -1162,6 +1176,7 @@ export class ThreeRenderer {
       (f.sprite.material as THREE.Material).dispose();
     }
     for (const [, g] of this.projMeshes) this.disposeGroup(g);
+    for (const m of this.models) if (m) disposeFighterModel(m);
     this.renderer.dispose();
     this.canvas.remove();
   }
@@ -1332,8 +1347,17 @@ export class ThreeRenderer {
         rig.charId = theme.id;
         this.applyTheme(rig, theme);
         stampFighterStyle(rig, theme, this.disposables);
+        this.attachModel(i as 0 | 1, theme.id);
       }
+      // keep sampling the keyframe pose even when a model is driving the
+      // visuals: the aura, light and trail effects read from rig.pose
       rigPoseFor(f, timeMs, rig.pose);
+      // a loaded model drives the skeleton; until then (and if the file never
+      // arrives) the procedural rig poses itself exactly as before
+      const model = this.models[i];
+      if (model) updateFighterModel(model, f, dtS);
+      else applyRigPose(rig, rig.pose);
+      rig.body.visible = !model;
       this.applyPose(rig, rig.pose, f, theme, timeMs);
     }
 
@@ -1449,6 +1473,34 @@ export class ThreeRenderer {
 
   /* -------------------------------- posing --------------------------------- */
 
+  /**
+   * Start loading slot `i`'s skinned model. The procedural rig keeps rendering
+   * until the file arrives; if the fetch fails the rig simply stays, so a fight
+   * is always playable. A late load for a character that has already changed is
+   * discarded via the token.
+   */
+  private attachModel(i: 0 | 1, themeId: string) {
+    if (!modelsAvailable) return;
+    const stale = this.models[i];
+    if (stale) {
+      this.rigs[i].root.remove(stale.root);
+      disposeFighterModel(stale);
+      this.models[i] = null;
+    }
+    const theme = getCharacter(themeId);
+    const spec = MODELS[lookFor(theme).model];
+    const token = ++this.modelToken[i];
+    loadFighterModel(theme, spec, i)
+      .then((model) => {
+        if (this.modelToken[i] !== token) return;
+        this.models[i] = model;
+        this.rigs[i].root.add(model.root);
+      })
+      .catch(() => {
+        /* offline or a bad file: keep the procedural rig */
+      });
+  }
+
   private applyTheme(rig: Rig, theme: CharacterTheme) {
     const m = rig.mats;
     m.suit.color.set(theme.suit);
@@ -1472,7 +1524,6 @@ export class ThreeRenderer {
 
     rig.root.position.set(f.x, f.y, 0);
     rig.root.rotation.y = f.facing === 1 ? 0 : Math.PI;
-    applyRigPose(rig, p);
 
     // accent glow: bright while striking, hot when the meter is full
     const charging = f.state === "attack";

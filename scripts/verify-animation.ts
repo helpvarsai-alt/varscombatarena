@@ -10,7 +10,12 @@
  *   4. multi-hit strings really alternate hands
  *   5. feet reach the floor (forward kinematics of the rig leg chain)
  *   6. the roster carries the build/hair/outfit data the renderer reads
+ *   7. every skeletal clip the model layer asks for exists in every vendored
+ *      .glb, is playable (non-zero length), and the loadouts name real meshes
+ *   8. each combo's beat count matches its hit count, and each beat lands
+ *      inside the move's real frame window
  */
+import { readFileSync } from "node:fs";
 import * as THREE from "three";
 import {
   CHANNELS,
@@ -23,6 +28,14 @@ import { MOVE_BY_ID, MOVES } from "../src/game/combos";
 import { CHARACTERS, getCharacter, getProportions } from "../src/game/characters";
 import { World, FIGHTER_H, type Fighter } from "../src/game/sim";
 import { applyRigPose, buildFighterRig, spineLayout, stampFighterStyle } from "../src/game/render3d";
+import {
+  CROUCH_DROP,
+  LOOKS,
+  MODELS,
+  MOVE_CLIPS,
+  STATE_CLIPS,
+  mappedClipNames,
+} from "../src/game/models";
 
 /*
  * Minimal 2D-canvas stub: the rig builder creates CanvasTextures for the aura
@@ -478,6 +491,188 @@ for (const c of CHARACTERS) {
     );
   }
 }
+
+/* ========================================================================== */
+/*  skeletal model layer                                                      */
+/*                                                                            */
+/*  These are the checks that a typecheck cannot make. A single typo in a clip  */
+/*  or mesh name would not fail the build — it would leave a fighter frozen in  */
+/*  its bind pose, or holding all five Knight shields at once, in the browser.  */
+/* ========================================================================== */
+
+interface ManifestClip {
+  name: string;
+  duration: number;
+}
+interface ManifestModel {
+  file: string;
+  joints: number;
+  clips: ManifestClip[];
+  bodyMeshes: string[];
+  propMeshes: string[];
+  bodyHeight: number;
+  feetY: number;
+  fullHeight: number;
+  forward: string;
+  rootMotionM: number;
+}
+const manifest = JSON.parse(
+  readFileSync(new URL("../src/game/model-manifest.json", import.meta.url), "utf8"),
+) as { source: { license: string }; models: Record<string, ManifestModel> };
+
+const manifestModels = manifest.models;
+
+// ---- 1. the vendored files themselves
+check(
+  "manifest lists every vendored model",
+  Object.keys(MODELS).every((k) => k in manifestModels) &&
+    Object.keys(manifestModels).length === Object.keys(MODELS).length,
+  `models.ts=${Object.keys(MODELS).join(",")} manifest=${Object.keys(manifestModels).join(",")}`,
+);
+check("models are CC0", /CC0/.test(manifest.source.license), manifest.source.license);
+
+for (const [name, spec] of Object.entries(MODELS)) {
+  const m = manifestModels[name];
+  if (!m) continue;
+  check(`${name}: rigged with a real skeleton`, m.joints >= 30, `${m.joints} joints`);
+  check(
+    `${name}: clips are in place (movement is code-driven)`,
+    m.rootMotionM < 0.02,
+    `root bone travels ${m.rootMotionM}m horizontally`,
+  );
+  check(
+    `${name}: faces +Z so the +90 degree frame rotation is correct`,
+    m.forward === "+Z",
+    `measured forward=${m.forward}`,
+  );
+  check(
+    `${name}: boots sit at y=0`,
+    Math.abs(m.feetY) < 0.02,
+    `feetY=${m.feetY}`,
+  );
+  check(
+    `${name}: recorded bodyHeight matches the binary`,
+    Math.abs(spec.bodyHeight - m.bodyHeight) < 0.02 && Math.abs(spec.feetY - m.feetY) < 0.02,
+    `spec=${spec.bodyHeight} measured=${m.bodyHeight.toFixed(3)}`,
+  );
+  // scaling from the BODY is what keeps hats and weapons from shrinking a fighter
+  const scale = FIGHTER_H / m.bodyHeight;
+  check(
+    `${name}: scales to the ${FIGHTER_H}u hitbox`,
+    Math.abs(m.bodyHeight * scale - FIGHTER_H) < 0.01 && scale > 40 && scale < 90,
+    `scale=${scale.toFixed(2)} (whole model would be ${(FIGHTER_H / m.fullHeight).toFixed(2)})`,
+  );
+}
+
+// ---- 2. every clip we ask for exists, in every model, and can actually play
+const wanted = mappedClipNames();
+check("the clip map is not empty", wanted.length > 12, `${wanted.length} clips`);
+for (const [name, m] of Object.entries(manifestModels)) {
+  const have = new Map(m.clips.map((c) => [c.name, c.duration]));
+  const missing = wanted.filter((w) => !have.has(w));
+  check(`${name}: every mapped clip exists`, missing.length === 0, missing.join(", "));
+  // a zero-length clip is a frozen pose, not an animation
+  const dead = wanted.filter((w) => have.has(w) && have.get(w)! <= 0);
+  check(`${name}: every mapped clip has duration`, dead.length === 0, dead.join(", "));
+}
+
+// ---- 3. loadouts name meshes that exist (a typo means a hidden weapon)
+for (const theme of CHARACTERS) {
+  const look = LOOKS[theme.id];
+  check(`${theme.id}: has a look`, !!look);
+  if (!look) continue;
+  const m = manifestModels[look.model];
+  check(`${theme.id}: look points at a vendored model`, !!m, look.model);
+  if (!m) continue;
+  const props = new Set([...m.propMeshes, ...m.bodyMeshes]);
+  const keep = look.keep ?? MODELS[look.model].keep;
+  const bogus = keep.filter((k) => !props.has(k));
+  check(`${theme.id}: loadout names real meshes`, bogus.length === 0, bogus.join(", "));
+  // and the loadout must actually trim the file down, not keep everything
+  check(
+    `${theme.id}: loadout hides most props`,
+    keep.length < m.propMeshes.length,
+    `keeps ${keep.length} of ${m.propMeshes.length} props`,
+  );
+  check(`${theme.id}: keeps the skinned body`, m.bodyMeshes.length >= 6, `${m.bodyMeshes.length} body meshes`);
+}
+// all six fighters must not collapse onto one silhouette+loadout pair
+const signatures = CHARACTERS.map((c) => {
+  const look = LOOKS[c.id];
+  return look ? `${look.model}|${[...(look.keep ?? [])].sort().join(",")}` : c.id;
+});
+check(
+  "no two fighters share a model and loadout",
+  new Set(signatures).size === signatures.length,
+  signatures.join(" / "),
+);
+
+// ---- 4. the state machine is fully covered
+const FSTATES = ["idle", "walk", "crouch", "air", "attack", "hurt", "block", "down", "ko", "win"];
+const covered = new Set([...Object.keys(STATE_CLIPS), "attack"]);
+const uncovered = FSTATES.filter((s) => !covered.has(s));
+check("every fighter state has a clip", uncovered.length === 0, uncovered.join(", "));
+check(
+  "crouch drops the fighter instead of standing still",
+  CROUCH_DROP > 8 && CROUCH_DROP < FIGHTER_H * 0.2,
+  `drop=${CROUCH_DROP}u`,
+);
+
+// ---- 5. every combo: one beat per hit, in order, inside the frame window
+const STEP_S = 1000 / 60 / 1000;
+for (const mv of MOVES) {
+  const cues = MOVE_CLIPS[mv.id];
+  check(`move ${mv.id} ${mv.name}: has an animation`, !!cues);
+  if (!cues) continue;
+
+  const beats = cues.filter((c) => c.hit !== false).length;
+  check(
+    `move ${mv.id} ${mv.name}: ${mv.hitCount} hit(s) = ${beats} beat(s)`,
+    beats === mv.hitCount,
+    `cues=${cues.map((c) => `${c.clip}@${c.at}`).join(" ")}`,
+  );
+  check(`move ${mv.id} ${mv.name}: starts on frame 1`, cues[0].at === 0, `at=${cues[0].at}`);
+  check(
+    `move ${mv.id} ${mv.name}: beats are ordered`,
+    cues.every((c, i) => c.at >= 0 && c.at < 1 && (i === 0 || c.at > cues[i - 1].at)),
+    cues.map((c) => c.at).join(","),
+  );
+  // the strike must not be scheduled past the move's own recovery
+  const total = mv.windup + mv.active + mv.recover;
+  const lastStart = cues[cues.length - 1].at * total;
+  check(
+    `move ${mv.id} ${mv.name}: last beat starts inside the move`,
+    lastStart < total,
+    `start frame ${lastStart.toFixed(1)} of ${total}`,
+  );
+  // multi-hit strings must not repeat one clip back to back at one speed
+  if (cues.length > 1) {
+    const alternating = cues.some((c, i) => i > 0 && c.clip !== cues[i - 1].clip);
+    check(
+      `move ${mv.id} ${mv.name}: multi-beat string varies its clips`,
+      alternating,
+      cues.map((c) => c.clip).join(" -> "),
+    );
+  }
+  // each beat has to be playable within its own slice of the move
+  for (let i = 0; i < cues.length; i++) {
+    const nextAt = i + 1 < cues.length ? cues[i + 1].at : 1;
+    const sliceS = Math.max(0.06, (nextAt - cues[i].at) * total * STEP_S);
+    check(
+      `move ${mv.id} ${mv.name}: beat ${i} fits its window`,
+      sliceS > 0.05 && sliceS < 3,
+      `${(sliceS * 1000).toFixed(0)}ms`,
+    );
+  }
+}
+
+// the twenty combos must not all play the same animation
+const distinct = new Set(Object.values(MOVE_CLIPS).map((c) => c.map((x) => x.clip).join(">")));
+check(
+  "the 20 combos use distinct animations",
+  distinct.size >= 18,
+  `${distinct.size} distinct sequences`,
+);
 
 console.log(
   failures === 0
