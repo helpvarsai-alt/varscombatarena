@@ -398,7 +398,7 @@ function FightScreen(props: FightProps) {
   const [phase, setPhase] = useState<"countdown" | "fight" | "over">("countdown");
   const [count, setCount] = useState(3);
   const [showFight, setShowFight] = useState(false);
-  const [kind, setKind] = useState<Renderer2D3D>("2d");
+  const [kind, setKind] = useState<Renderer2D3D>("3d");
   const [muted, setMuted] = useState(false);
   const [paused, setPaused] = useState(false);
   const [result, setResult] = useState<0 | 1 | "tie" | null>(null);
@@ -711,7 +711,7 @@ function FightScreen(props: FightProps) {
         <div className="absolute bottom-2 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/15 bg-black/60 px-2 py-1.5 backdrop-blur">
           <button
             onClick={() => {
-              const next: Renderer2D3D = kind === "2d" ? "3d" : "2d";
+              const next: Renderer2D3D = kind === "3d" ? "2d" : "3d";
               setKind(next);
               engineRef.current?.setRenderer(next);
               sfx.ui();

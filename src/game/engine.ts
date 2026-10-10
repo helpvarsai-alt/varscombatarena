@@ -29,6 +29,8 @@ export interface EngineOptions {
   difficulty?: Difficulty;
   /** intro countdown before inputs unlock (ms, wall-clock so both peers sync) */
   countdownMs?: number;
+  /** starting renderer ("3d" rig by default) */
+  renderer?: Renderer2D3D;
   onHud: (h: HudState) => void;
   onPhase?: (p: "countdown" | "fight" | "over") => void;
   onEnd?: (winner: 0 | 1 | "tie") => void;
@@ -47,7 +49,7 @@ export class GameEngine {
   readonly input: InputManager;
   private opts: EngineOptions;
   private renderer: CanvasRenderer | ThreeRenderer | null = null;
-  private kind: Renderer2D3D = "2d";
+  private kind: Renderer2D3D = "3d";
   private raf = 0;
   private lastT = 0;
   private acc = 0;
@@ -83,7 +85,7 @@ export class GameEngine {
 
     w.onFx = (e) => this.handleFx(e);
 
-    this.setRenderer("2d");
+    this.setRenderer(opts.renderer ?? "3d");
     window.addEventListener("resize", this.resizeHandler);
     window.addEventListener("orientationchange", this.resizeHandler);
     // first touch anywhere (arena or buttons) unlocks WebAudio on mobile

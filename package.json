@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "verify:anim": "bun scripts/verify-animation.ts",
     "format": "prettier --write .",
     "preview": "vite preview"
   },

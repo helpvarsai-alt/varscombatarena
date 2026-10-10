@@ -1,10 +1,21 @@
 /**
  * Roster — 6 fighters. Every character shares the exact same 20 combos and
- * frame data (pure fairness); what changes is animation flavor, aura color,
- * particle style and hit effects, which live in `CharacterTheme`.
+ * frame data (pure fairness); what changes is animation flavor, body build,
+ * hair/outfit, aura color, particle style and hit effects.
+ *
+ * `build` / `hairStyle` / `outfit` are consumed by the 3D rig so each fighter
+ * reads as a clearly different person at a glance; `trim` is the secondary
+ * outfit colour (belt, wraps, plating).
  */
 
 export type ParticleStyle = "ember" | "flake" | "volt" | "shard" | "shade" | "droplet";
+
+/** Body proportions for the 3D rig. */
+export type Build = "power" | "agile" | "tank" | "slim" | "shadow" | "flow";
+
+export type HairStyle = "spike" | "long" | "mohawk" | "buzz" | "ponytail" | "braid";
+
+export type Outfit = "gi" | "coat" | "hoodie" | "armor" | "ninja" | "wrap";
 
 export interface CharacterTheme {
   id: string;
@@ -23,6 +34,12 @@ export interface CharacterTheme {
   particle: ParticleStyle;
   /** how the idle aura behaves */
   auraStyle: "flame" | "frost" | "volt" | "stone" | "void" | "tide";
+  /** 3D body proportions */
+  build: Build;
+  hairStyle: HairStyle;
+  outfit: Outfit;
+  /** secondary outfit colour: belt, wraps, plating */
+  trim: string;
 }
 
 export const CHARACTERS: CharacterTheme[] = [
@@ -37,6 +54,10 @@ export const CHARACTERS: CharacterTheme[] = [
     hair: "#7a2e0e",
     particle: "ember",
     auraStyle: "flame",
+    build: "power",
+    hairStyle: "spike",
+    outfit: "gi",
+    trim: "#f4ede2",
   },
   {
     id: "frost",
@@ -49,6 +70,10 @@ export const CHARACTERS: CharacterTheme[] = [
     hair: "#cfe9f7",
     particle: "flake",
     auraStyle: "frost",
+    build: "slim",
+    hairStyle: "long",
+    outfit: "coat",
+    trim: "#eaf7ff",
   },
   {
     id: "volt",
@@ -61,6 +86,10 @@ export const CHARACTERS: CharacterTheme[] = [
     hair: "#f4e04d",
     particle: "volt",
     auraStyle: "volt",
+    build: "agile",
+    hairStyle: "mohawk",
+    outfit: "hoodie",
+    trim: "#1b1e33",
   },
   {
     id: "terra",
@@ -73,6 +102,10 @@ export const CHARACTERS: CharacterTheme[] = [
     hair: "#2f2417",
     particle: "shard",
     auraStyle: "stone",
+    build: "tank",
+    hairStyle: "buzz",
+    outfit: "armor",
+    trim: "#f3e2bf",
   },
   {
     id: "nyx",
@@ -85,6 +118,10 @@ export const CHARACTERS: CharacterTheme[] = [
     hair: "#17102b",
     particle: "shade",
     auraStyle: "void",
+    build: "shadow",
+    hairStyle: "ponytail",
+    outfit: "ninja",
+    trim: "#ff7ad9",
   },
   {
     id: "tide",
@@ -97,9 +134,38 @@ export const CHARACTERS: CharacterTheme[] = [
     hair: "#134e4a",
     particle: "droplet",
     auraStyle: "tide",
+    build: "flow",
+    hairStyle: "braid",
+    outfit: "wrap",
+    trim: "#c8fff2",
   },
 ];
 
 export function getCharacter(id: string): CharacterTheme {
   return CHARACTERS.find((c) => c.id === id) ?? CHARACTERS[0];
+}
+
+/** Proportions the 3D rig reads for a given build (1.0 = baseline). */
+export interface Proportions {
+  /** overall height multiplier (also stretches limbs) */
+  height: number;
+  /** shoulder / torso width multiplier */
+  width: number;
+  /** muscle bulge on arms & legs */
+  muscle: number;
+  /** head size multiplier */
+  head: number;
+}
+
+export const BUILDS: Record<Build, Proportions> = {
+  power: { height: 1.02, width: 1.14, muscle: 1.22, head: 0.98 },
+  agile: { height: 1.0, width: 0.97, muscle: 1.02, head: 1.0 },
+  tank: { height: 0.99, width: 1.3, muscle: 1.38, head: 0.96 },
+  slim: { height: 1.05, width: 0.9, muscle: 0.86, head: 1.0 },
+  shadow: { height: 1.02, width: 0.94, muscle: 0.94, head: 1.02 },
+  flow: { height: 1.0, width: 1.0, muscle: 1.06, head: 1.0 },
+};
+
+export function getProportions(id: string): Proportions {
+  return BUILDS[getCharacter(id).build];
 }
