@@ -23,6 +23,8 @@ type Disposable = { dispose(): void };
 /** Pre-fight lobby: pick a fighter, then go 1v1 vs the CPU or open a room code
  *  a friend can join from anywhere on Earth. No sign-in — identity is the
  *  device id + the 5-character room code.
+ * On first load the roster and the VS CPU section should be visible, same as
+ * the audited screenshot.
  */
 export default function Play() {
   const navigate = useNavigate();
@@ -335,12 +337,13 @@ function FighterCardPreview({ charId, active }: { charId: string; active: boolea
   const cardRef = ref as React.MutableRefObject<HTMLDivElement>;
 
   useEffect(() => {
-    if (!ref.current) return;
+    const hostEl = ref.current;
+    if (!hostEl) return;
     setMounted(true);
     let disposed = false;
     (async () => {
       try {
-        const { renderer, scene, camera, fighter } = await buildPreview(ref.current, charId);
+        const { renderer, scene, camera, fighter } = await buildPreview(hostEl, charId);
         if (disposed) {
           disposePreview(renderer, scene, camera, fighter);
           return;
@@ -375,6 +378,42 @@ function FighterCardPreview({ charId, active }: { charId: string; active: boolea
 /** Build a tiny 3D read-in of `charId` into `hostEl`.
  *  Reuses the same arena lighting language and the same rig builder as the fight,
  *  so the selection card and the fight screen read as siblings. */
+function freshMock(charId: string): Fighter {
+  return {
+    charId,
+    state: "idle",
+    stateT: 0,
+    move: null,
+    moveFrame: 0,
+    x: 0,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    facing: 1,
+    side: 0,
+    blocking: false,
+    airborne: false,
+    jumpLatch: false,
+    comboHits: 0,
+    comboT: 0,
+    pending: null,
+    rehitT: 0,
+    hitsLanded: 0,
+    buf: [],
+    hitstun: 0,
+    blockstun: 0,
+    downT: 0,
+    invuln: 0,
+    projCd: 0,
+    spawned: false,
+    hp: 100,
+    meter: 0,
+    walkPhase: 0,
+    acked: 0,
+    predT: 0,
+  };
+}
+
 async function buildPreview(
   hostEl: HTMLDivElement,
   charId: string,
@@ -403,7 +442,6 @@ async function buildPreview(
   camera.position.set(0, 60, 150);
   camera.lookAt(0, 46, 0);
 
-  const theme = getCharacter(charId);
   const props = getProportions(charId);
   const disposables: Disposable[] = [];
   const rig = buildFighterRig(props, disposables);
@@ -424,7 +462,7 @@ async function buildPreview(
 
   // drop the procedural rig so the thumbnail leans on the pose, not the load
   applyRigPose(rig, baseStanceA());
-  rigPoseForA(mockFighter, 0, (rig.pose as unknown as Pose3) as Pose3);
+  rigPoseForA(freshMock(charId), 0, (rig.pose as unknown as Pose3) as Pose3);
   applyRigPose(rig, (rig.pose as unknown as Pose3) as Pose3);
 
   renderer.render(scene, camera);
@@ -436,41 +474,6 @@ async function buildPreview(
     fighter: rig.root,
   };
 }
-
-const mockFighter: Fighter = {
-  charId: "",
-  state: "idle",
-  stateT: 0,
-  move: null,
-  moveFrame: 0,
-  x: 0,
-  y: 0,
-  vx: 0,
-  vy: 0,
-  facing: 1,
-  side: 0,
-  blocking: false,
-  airborne: false,
-  jumpLatch: false,
-  comboHits: 0,
-  comboT: 0,
-  buffer: [],
-  pending: null,
-  rehitT: 0,
-  hitstun: 0,
-  blockstun: 0,
-  downT: 0,
-  invuln: 0,
-  projCd: 0,
-  spawned: false,
-  hp: 100,
-  meter: 0,
-  walkPhase: 0,
-  acked: 0,
-  predT: 0,
-  puffT: 0,
-  groundT: 0,
-} as unknown as Fighter;
 
 /** Teardown a preview during hot reload or card unmount. */
 function disposePreview(
