@@ -197,6 +197,9 @@ function idlePose(p: Pose3, base: Pose3, f: Fighter, timeMs: number) {
 
 function walkPose(p: Pose3, base: Pose3, f: Fighter, timeMs: number) {
   reset(p, base);
+  // walkPhase is ground covered divided by this rig's stride (RIG_CYCLE_DISTANCE
+  // in sim.ts), so the feet plant at whatever speed the fighter is really
+  // moving instead of cycling on their own clock
   const ph = f.walkPhase * Math.PI * 2;
   const s = Math.sin(ph);
   const c = Math.cos(ph);

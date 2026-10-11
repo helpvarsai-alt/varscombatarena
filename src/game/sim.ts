@@ -1,4 +1,10 @@
-import { MOVE_BY_ID, matchCombo, type MoveData } from "./combos";
+import {
+  MOVE_BY_ID,
+  PROJECTILE_REHIT,
+  matchCombo,
+  rehitGap,
+  type MoveData,
+} from "./combos";
 
 /**
  * Fixed-timestep fighting simulation (60Hz logical ticks).
@@ -20,6 +26,19 @@ export const MAX_METER = 100;
 export const MATCH_SECONDS = 99;
 export const FIGHTER_H = 150;
 export const FIGHTER_W = 48;
+
+/**
+ * Ground the stand-in rig's walk cycle covers in one cycle, in fighter units.
+ *
+ * Measured headless off the real rig: the widest gap between the two boots over
+ * a cycle is one step, and a cycle is two steps. scripts/verify-animation.ts
+ * re-measures it every run and fails if the gait changes under this constant.
+ *
+ * `walkPhase` is advanced by ground covered divided by this, so the procedural
+ * feet grip the deck at whatever speed the fighter is really moving instead of
+ * on a free-running clock, and both renderers read the same phase.
+ */
+export const RIG_CYCLE_DISTANCE = 169;
 
 export type FState =
   | "idle"
@@ -358,11 +377,14 @@ export class World {
     if (fwd && !back) {
       f.vx = WALK_SPEED * f.facing;
       f.state = "walk";
-      f.walkPhase += STEP_MS * 0.02;
+      // one cycle per stride of ground covered, so the stand-in rig's feet
+      // plant instead of skating: the phase IS distance / stride, never a
+      // free-running clock that drifts away from the movement it belongs to
+      f.walkPhase += (f.vx * (STEP_MS / 1000)) / RIG_CYCLE_DISTANCE;
     } else if (back && !fwd) {
       f.vx = -BACK_SPEED * f.facing;
       f.state = "walk";
-      f.walkPhase -= STEP_MS * 0.02;
+      f.walkPhase += (f.vx * (STEP_MS / 1000)) / RIG_CYCLE_DISTANCE;
     } else {
       f.vx = 0;
       f.state = "idle";
@@ -537,7 +559,7 @@ export class World {
       return;
     }
     f.hitsLanded++;
-    f.rehitT = Math.max(9, Math.floor(mv.active / Math.max(1, mv.hitCount)) + 4);
+    f.rehitT = rehitGap(mv);
     const last = f.hitsLanded >= mv.hitCount;
     const ev: OutEvent = {
       s: ++this.seq,
@@ -653,7 +675,7 @@ export class World {
           p.y + p.h / 2 > v.y;
         if (overlap && p.rehit <= 0 && v.invuln <= 0 && v.downT <= 0 && v.state !== "ko" && mv) {
           p.hits++;
-          p.rehit = 14;
+          p.rehit = PROJECTILE_REHIT;
           const last = p.hits >= mv.hitCount;
           const ev: OutEvent = {
             s: ++this.seq,

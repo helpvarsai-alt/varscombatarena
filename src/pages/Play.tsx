@@ -6,7 +6,8 @@ import { useNavigate } from "react-router";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { CHARACTERS, getCharacter, getProportions } from "@/game/characters";
+import { CHARACTERS, getCharacter } from "@/game/characters";
+import { rigProportionsFor } from "@/game/models";
 import { getPlayerId, getPlayerName, setPlayerName } from "@/game/player";
 import type { Difficulty } from "@/game/types";
 import * as THREE from "three";
@@ -442,23 +443,26 @@ async function buildPreview(
   camera.position.set(0, 60, 150);
   camera.lookAt(0, 46, 0);
 
-  const props = getProportions(charId);
+  // the roster preview has to match the fighter the match will hand the player:
+  // same height as the model it will be swapped for, same lighting family
+  const props = rigProportionsFor(getCharacter(charId));
   const disposables: Disposable[] = [];
   const rig = buildFighterRig(props, disposables);
   rig.root.position.set(-160, 0, 0);
   rig.root.rotation.y = 0;
   scene.add(rig.root);
 
-  const key = new THREE.DirectionalLight(0xfff2e2, 1.1);
+  // warm key / cool fill / warm rim, the same family the arena uses
+  const key = new THREE.DirectionalLight(0xffdcae, 1.25);
   key.position.set(-220, 180, 220);
   scene.add(key);
-  const fill = new THREE.DirectionalLight(0x5fd8ff, 0.55);
+  const fill = new THREE.DirectionalLight(0x8098cc, 0.5);
   fill.position.set(220, 120, -200);
   scene.add(fill);
-  const rim = new THREE.DirectionalLight(0xff6fbf, 0.5);
+  const rim = new THREE.DirectionalLight(0xd08f45, 0.6);
   rim.position.set(120, 60, -260);
   scene.add(rim);
-  scene.add(new THREE.AmbientLight(0x3b4972, 0.55));
+  scene.add(new THREE.AmbientLight(0x232a33, 0.6));
 
   // drop the procedural rig so the thumbnail leans on the pose, not the load
   applyRigPose(rig, baseStanceA());

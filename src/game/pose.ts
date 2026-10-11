@@ -1,4 +1,22 @@
-import type { Fighter } from "./sim";
+import { RIG_CYCLE_DISTANCE, type Fighter } from "./sim";
+
+/**
+ * 2D canvas limb lengths, in fighter units. The canvas renderer draws these
+ * numbers, and scripts/verify-animation.ts measures the walk cycle they produce,
+ * so the shared walk phase keeps both renderers' feet on the deck.
+ */
+export const POSE2D_LIMB = { thigh: 40, shin: 40, torso: 52, head: 22 };
+
+/**
+ * Ground the 2D figure covers in one walk cycle, measured the same way as the
+ * 3D rig's stride (widest gap between the two feet, times two) from its own
+ * limb chain - see verify:anim, which measures it every run. The phase is owned
+ * by the simulation and advanced in stand-in-rig units, so the 2D skeleton
+ * scales it by the ratio of the two strides; without that its shorter legs
+ * would skate by 40%.
+ */
+export const POSE2D_CYCLE_DISTANCE = 119;
+export const POSE2D_PHASE_SCALE = RIG_CYCLE_DISTANCE / POSE2D_CYCLE_DISTANCE;
 
 /**
  * One skeletal pose drives BOTH renderers: the canvas renderer turns the
@@ -97,7 +115,7 @@ export function poseFor(f: Fighter, timeMs: number): Pose {
 
   switch (f.state) {
     case "walk": {
-      const ph = f.walkPhase * Math.PI * 2;
+      const ph = f.walkPhase * POSE2D_PHASE_SCALE * Math.PI * 2;
       p.legF = [Math.sin(ph) * 0.55, 0.15 + Math.max(0, -Math.sin(ph)) * 0.6];
       p.legB = [Math.sin(ph + Math.PI) * 0.55, 0.15 + Math.max(0, -Math.sin(ph + Math.PI)) * 0.6];
       p.hip = 76 + Math.abs(Math.sin(ph)) * 2;

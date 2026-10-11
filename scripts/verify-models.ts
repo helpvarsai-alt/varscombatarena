@@ -21,17 +21,37 @@ import { readFileSync } from "node:fs";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
-  MODELS,
+  CLIP_IMPACT,
+  LOCO_BACK,
+  LOCO_CYCLE_MU,
+  LOCO_FORWARD,
   LOOKS,
+  MODELS,
   MOVE_CLIPS,
   buildFighterModel,
+  impactFraction,
   mappedClipNames,
+  hittableHits,
+  moveClipsFor,
+  planBeats,
   updateFighterModel,
   type FighterModel,
 } from "../src/game/models";
 import { CHARACTERS, getCharacter } from "../src/game/characters";
-import { FIGHTER_H, World, type Fighter } from "../src/game/sim";
-import { MOVE_BY_ID } from "../src/game/combos";
+import {
+  BACK_SPEED,
+  FIGHTER_H,
+  WALK_SPEED,
+  World,
+  emptyInput,
+  type Fighter,
+} from "../src/game/sim";
+import {
+  MOVES,
+  MOVE_BY_ID,
+  PROJECTILE_REHIT,
+  rehitGap,
+} from "../src/game/combos";
 
 let failures = 0;
 let passes = 0;
@@ -289,7 +309,143 @@ async function verifyTheme(themeId: string) {
     `${label}: the idle skeleton animates`,
     signatureDistance(before, after) > 0.02,
     `delta=${signatureDistance(before, after).toFixed(4)}`,
-  ); // ---- every clip the game can ask for exists, plays and moves the skeleton
+  );
+
+  /* ---- the numbers the retimer and the animator rely on are re-measured ----
+   *
+   * models.ts carries the contact fraction of every attack clip and the ground
+   * each locomotion clip covers. Both are hand-set constants, so they are
+   * re-derived here from the binaries, through the same loader and the same
+   * posed skeleton the game uses. If a model file is ever replaced, these fail
+   * before anything on screen can drift.
+   */
+  const scene = model.root.children[0];
+  const bone = (name: string) => {
+    let found: THREE.Object3D | null = null;
+    scene.traverse((o) => {
+      if (!found && o.name.replace(/[.\s_]/g, "").toLowerCase() === name) found = o;
+    });
+    return found as THREE.Object3D | null;
+  };
+  const hips = bone("hips");
+  const limbs = ["handl", "handr", "toesl", "toesr"].map(bone);
+  check(
+    `${label}: the skeleton has the joints the retimer measures`,
+    !!hips && limbs.every((l) => !!l),
+    `hips=${!!hips} limbs=${limbs.filter(Boolean).length}/4`,
+  );
+
+  const frame = new THREE.Group();
+  frame.add(model.root);
+  frame.updateMatrixWorld(true);
+  const v = new THREE.Vector3();
+  const origin = new THREE.Vector3();
+  const sampleClip = (clip: string, samples: number) => {
+    const action = model.actions.get(clip)!;
+    model.mixer.stopAllAction();
+    action.reset();
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
+    action.setEffectiveWeight(1);
+    action.play();
+    const dur = model.durations.get(clip)!;
+    const out: { t: number; reach: number; left: THREE.Vector3; right: THREE.Vector3 }[] = [];
+    for (let i = 0; i < samples; i++) {
+      const t = (dur * i) / samples;
+      model.mixer.setTime(t);
+      frame.updateMatrixWorld(true);
+      hips!.getWorldPosition(origin);
+      let reach = -Infinity;
+      for (const l of limbs) {
+        l!.getWorldPosition(v);
+        reach = Math.max(reach, v.x - origin.x);
+      }
+      const left = new THREE.Vector3();
+      const right = new THREE.Vector3();
+      bone("footl")!.getWorldPosition(left);
+      bone("footr")!.getWorldPosition(right);
+      out.push({ t, reach, left, right });
+    }
+    return { dur, out };
+  };
+
+  // contact fraction: peak forward reach of the limbs, as a share of the clip
+  let worstImpact = 0;
+  let worstImpactClip = "";
+  let impactChecked = 0;
+  for (const clip of Object.keys(CLIP_IMPACT)) {
+    if (!model.actions.has(clip)) continue;
+    const { out } = sampleClip(clip, 60);
+    let best = -Infinity;
+    let bestI = 0;
+    for (let i = 0; i < out.length; i++) {
+      if (out[i].reach > best) {
+        best = out[i].reach;
+        bestI = i;
+      }
+    }
+    const measured = bestI / out.length;
+    // the spin clips are pinned to the middle on purpose: their limbs are
+    // extended through the whole turn, so the argmax means nothing
+    if (clip.includes("Spin")) continue;
+    impactChecked++;
+    const drift = Math.abs(measured - CLIP_IMPACT[clip]);
+    if (drift > worstImpact) {
+      worstImpact = drift;
+      worstImpactClip = `${clip} recorded ${CLIP_IMPACT[clip]} measured ${measured.toFixed(2)}`;
+    }
+  }
+  check(
+    `${label}: recorded clip contacts match the binary`,
+    worstImpact <= 0.05,
+    `${impactChecked} clips, worst ${worstImpact.toFixed(3)} :: ${worstImpactClip}`,
+  );
+
+  // locomotion: one step is the widest split of the two feet, cycle = two steps
+  const scale = model.root.scale.x;
+  for (const clip of [LOCO_FORWARD, LOCO_BACK]) {
+    const { out } = sampleClip(clip, 96);
+    let high = -Infinity;
+    let low = Infinity;
+    for (const s of out) {
+      high = Math.max(high, s.left.x, s.right.x);
+      low = Math.min(low, s.left.x, s.right.x);
+    }
+    const measured = ((high - low) * 2) / scale;
+    const recorded = LOCO_CYCLE_MU[clip];
+    check(
+      `${label}: ${clip} covers the recorded ground per cycle`,
+      Math.abs(measured - recorded) / recorded < 0.08,
+      `measured=${measured.toFixed(3)}mu recorded=${recorded}mu (${(measured * scale).toFixed(1)}u)`,
+    );
+  }
+
+  // The stand-in rig is scaled to this figure, so the hand-off to the model does
+  // not change the fighter's height. The idle breathes, so the presented height
+  // is its peak over the loop, measured here rather than at one lucky instant.
+  model.mixer.stopAllAction();
+  const idle = model.actions.get("Unarmed_Idle")!;
+  idle.reset();
+  idle.setLoop(THREE.LoopRepeat, Infinity);
+  idle.setEffectiveWeight(1);
+  idle.play();
+  let presented = 0;
+  let lowest = Infinity;
+  for (let i = 0; i < 8; i++) {
+    model.mixer.setTime((i / 8) * idle.getClip().duration);
+    const b = posedBounds(model);
+    presented = Math.max(presented, b.max.y - b.min.y);
+    lowest = Math.min(lowest, b.min.y);
+  }
+  console.log(
+    `  ${themeId.padEnd(6)} presented height ${presented.toFixed(1)}u (feet ${lowest.toFixed(2)}u) :: recorded ${look.presentedHeight}u`,
+  );
+  check(
+    `${label}: stands the height the stand-in rig was scaled to`,
+    Math.abs(presented - look.presentedHeight) < 3 && Math.abs(lowest) < 4,
+    `model=${presented.toFixed(1)}u (feet ${lowest.toFixed(2)}) recorded=${look.presentedHeight}u`,
+  );
+  frame.remove(model.root); // ---- every clip the game can ask for exists, plays and moves the skeleton
   // (mappedClipNames() is the union of combo beats and state clips)
   const wanted = mappedClipNames();
   for (const clipName of wanted) {
@@ -334,7 +490,7 @@ function verifyDriveLoop(model: FighterModel, themeId: string) {
   // every non-attack state must resolve to the clip it maps to
   const expectedStateClips: Record<string, string> = {
     idle: "Unarmed_Idle",
-    walk: "Walking_A",
+    walk: LOCO_FORWARD,
     crouch: "Blocking",
     air: "Jump_Idle",
     hurt: "Hit_A",
@@ -372,16 +528,70 @@ function verifyDriveLoop(model: FighterModel, themeId: string) {
   );
   check(
     `${themeId}: walking forward picks the forward clip`,
-    model.current?.getClip().name === "Walking_A",
+    model.current?.getClip().name === LOCO_FORWARD,
     model.current?.getClip().name ?? "none",
   );
   f.vx = -200;
   updateFighterModel(model, f, 1 / 60);
   check(
     `${themeId}: walking backwards picks the backpedal clip`,
-    model.current?.getClip().name === "Walking_Backwards",
+    model.current?.getClip().name === LOCO_BACK,
     model.current?.getClip().name ?? "none",
   );
+
+  /* ---- locomotion cadence: the feet have to move as fast as the ground ----
+   *
+   * The clip is in place, so its step rate is the ONLY thing that decides
+   * whether the feet slip. Rate is derived from the ground the clip covers per
+   * cycle, so this measures what the skeleton's feet really do against the
+   * speed the simulation is applying.
+   */
+  const footSpeed = (clip: string, speed: number) => {
+    f.state = "walk";
+    f.vx = clip === LOCO_BACK ? -speed : speed;
+    f.facing = 1;
+    for (let i = 0; i < 3; i++) updateFighterModel(model, f, 1 / 60);
+    const rate = model.current?.getEffectiveTimeScale() ?? 0;
+    const cycle = (LOCO_CYCLE_MU[clip] ?? 0.8) * model.root.scale.x;
+    const dur = model.durations.get(clip) ?? 1;
+    return { rate, foot: (rate * cycle) / dur, clip: model.current?.getClip().name ?? "" };
+  };
+  const fwd = footSpeed(LOCO_FORWARD, WALK_SPEED);
+  check(
+    `${themeId}: the forward run covers the ground the fighter does`,
+    fwd.clip === LOCO_FORWARD && Math.abs(fwd.foot - WALK_SPEED) / WALK_SPEED < 0.06,
+    `feet ${fwd.foot.toFixed(0)}u/s vs ${WALK_SPEED}u/s at rate ${fwd.rate.toFixed(2)}`,
+  );
+  const back = footSpeed(LOCO_BACK, BACK_SPEED);
+  check(
+    `${themeId}: the backpedal is within a documented slip of its speed`,
+    back.clip === LOCO_BACK && back.foot / BACK_SPEED > 0.6,
+    `feet ${back.foot.toFixed(0)}u/s vs ${BACK_SPEED}u/s at rate ${back.rate.toFixed(2)} (slip ${(BACK_SPEED / back.foot).toFixed(2)}x)`,
+  );
+
+  /* ---- reactions have to fit the state that owns them ---- */
+  f.state = "hurt";
+  f.hitstun = 13;
+  f.vx = 0;
+  updateFighterModel(model, f, 1 / 60);
+  const hurtRate = model.current?.getEffectiveTimeScale() ?? 1;
+  const hurtClip = model.current?.getClip().name ?? "";
+  check(
+    `${themeId}: the hit reaction is retimed into its stun`,
+    (hurtClip === "Hit_A" || hurtClip === "Hit_B") && hurtRate > 1.5,
+    `${hurtClip} at rate ${hurtRate.toFixed(2)} for a 13 frame stun`,
+  );
+  f.state = "down";
+  f.downT = 38;
+  f.hitstun = 0;
+  updateFighterModel(model, f, 1 / 60);
+  check(
+    `${themeId}: the knockdown is retimed into its lie-down window`,
+    model.current?.getClip().name === "Lie_Down" &&
+      (model.current?.getEffectiveTimeScale() ?? 1) > 1.5,
+    `rate ${(model.current?.getEffectiveTimeScale() ?? 0).toFixed(2)}`,
+  );
+  f.downT = 0;
 
   // crouch: the frame drops and comes back
   f.state = "crouch";
@@ -415,7 +625,7 @@ function verifyDriveLoop(model: FighterModel, themeId: string) {
     if (seen[seen.length - 1] !== name) seen.push(name);
     sigs.push(poseSignature(model));
   }
-  const expected = [...new Set(MOVE_CLIPS[19].map((c) => c.clip))];
+  const expected = [...new Set(moveClipsFor(19, themeId).map((c) => c.clip))];
   const got = [...new Set(seen)];
   check(
     `${themeId}: Ultimate Surge plays every beat in order`,
@@ -451,6 +661,107 @@ function verifyDriveLoop(model: FighterModel, themeId: string) {
     live.length <= 3,
     `${live.length} active actions`,
   );
+
+  /* ---- where the skeleton actually peaks, versus where the hitbox is ----
+   *
+   * This is the whole point of the retimer, measured through the real mixer and
+   * the real clip offsets rather than predicted from the plan: step the move
+   * frame by frame, watch the clip's own progress, and record the frame at which
+   * it passes its measured contact fraction.
+   */
+  let beatsSeen = 0;
+  let aligned = 0;
+  let worstDrift = 0;
+  let worstInfo = "";
+  let contactsOffBox = 0;
+  const offBoxInfo: string[] = [];
+  for (const move of MOVES) {
+    const beats = planBeats(move, moveClipsFor(move.id, themeId));
+    const total = move.windup + move.active + move.recover;
+    const activeEnd = move.windup + move.active;
+    f.state = "attack";
+    f.move = move;
+    f.airborne = !!move.air;
+    const contact = new Array<number>(beats.length).fill(-1);
+    for (let frame = 0; frame < total; frame++) {
+      const before = model.current ? model.current.time : 0;
+      f.moveFrame = frame;
+      updateFighterModel(model, f, 1 / 60);
+      const action = model.current;
+      if (!action) continue;
+      const clip = action.getClip();
+      const dur = clip.duration > 0 ? clip.duration : 1;
+      const target = impactFraction(clip.name) * dur;
+      const after = action.time;
+      for (let b = 0; b < beats.length; b++) {
+        const beat = beats[b];
+        if (contact[b] >= 0 || !beat.hit) continue;
+        if (frame < beat.start || frame >= beat.end) continue;
+        if (clip.name !== beat.clip) continue;
+        // the clip crosses its contact partway through the frame it is reached
+        // on, so interpolate inside the step instead of rounding up to the next
+        const span = after - before;
+        const cross = span > 1e-6 ? frame - (after - target) / span : frame;
+        if (after >= target && cross >= beat.start) contact[b] = cross;
+      }
+    }
+    for (let b = 0; b < beats.length; b++) {
+      const beat = beats[b];
+      if (!beat.hit) continue;
+      beatsSeen++;
+      // the cast beat of a projectile move is the release; the rest are spread
+      // on the projectile's own rhythm, which the travelled distance decides
+      const live = move.type === "projectile" && b > 0 ? [0, total] : [move.windup, activeEnd];
+      if (contact[b] < 0) {
+        contactsOffBox++;
+        offBoxInfo.push(`move ${move.id} beat ${b} (${beat.clip}) never peaked`);
+        continue;
+      }
+      // the contact is interpolated inside the frame it is reached on, so a
+      // quarter frame of slack keeps an exact boundary hit on the right side
+      if (contact[b] < live[0] - 0.25 || contact[b] > live[1] + 0.25) {
+        contactsOffBox++;
+        offBoxInfo.push(
+          `move ${move.id} beat ${b} (${beat.clip}) peaked at frame ${contact[b].toFixed(1)}, live ${live[0]}..${live[1]}`,
+        );
+      }
+      const drift = Math.abs(contact[b] - beat.strike);
+      if (drift > worstDrift) {
+        worstDrift = drift;
+        worstInfo = `move ${move.id} beat ${b} (${beat.clip}) contact ${contact[b].toFixed(1)} strike ${beat.strike}`;
+      }
+      if (drift <= 1.5) aligned++;
+    }
+  }
+  check(
+    `${themeId}: every strike peaks on the frame its hitbox opens`,
+    aligned === beatsSeen && beatsSeen >= 20,
+    `${aligned}/${beatsSeen} beats within 1.5 frames, worst ${worstDrift} :: ${worstInfo}`,
+  );
+  check(
+    `${themeId}: no strike is shown outside a live hitbox window`,
+    contactsOffBox === 0,
+    `${contactsOffBox} beats off the active frames :: ${offBoxInfo.slice(0, 4).join(" | ")}`,
+  );
+  console.log(
+    `  ${themeId.padEnd(6)} strike alignment: ${aligned}/${beatsSeen} beats within 1.5 frames (worst ${worstDrift.toFixed(1)} frame(s))`,
+  );
+}
+
+/**
+ * Moves whose declared hit count cannot all land, printed as a diagnostic.
+ * These are real gameplay findings, not animation bugs: the beat table is
+ * faithful to the frame data either way.
+ */
+for (const move of MOVES) {
+  const hittable = hittableHits(move);
+  if (hittable < move.hitCount) {
+    const gap = move.type === "projectile" ? PROJECTILE_REHIT : rehitGap(move);
+    console.log(
+      `  NOTE ${move.name}: declares ${move.hitCount} hit(s) but the active window ` +
+        `(${move.active} frames, one hit every ${gap}) can only deliver ${hittable}`,
+    );
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -459,6 +770,31 @@ const models = new Map<string, FighterModel>();
 for (const theme of CHARACTERS) {
   const model = await verifyTheme(theme.id);
   models.set(theme.id, model);
+}
+
+/* ---- the fighters face each other, and the frame they are drawn in is the
+   same one the sim fights in (forward is +X; models.ts rotates the +Z model
+   frame onto it, and verify-animation checks the manifest's measured axis) ---- */
+{
+  const w = new World("blaze", "frost");
+  const [a, b] = w.f;
+  a.x = 400;
+  b.x = 620;
+  for (let i = 0; i < 30; i++) w.step([emptyInput(), emptyInput()]);
+  check(
+    "each fighter faces its opponent",
+    a.facing === Math.sign(b.x - a.x) && b.facing === Math.sign(a.x - b.x),
+    `a at ${a.x.toFixed(0)} facing ${a.facing}, b at ${b.x.toFixed(0)} facing ${b.facing}`,
+  );
+  // walk one past the other and they must both turn to keep facing each other
+  a.x = 700;
+  b.x = 560;
+  for (let i = 0; i < 30; i++) w.step([emptyInput(), emptyInput()]);
+  check(
+    "and they turn when they cross over",
+    a.facing === Math.sign(b.x - a.x) && a.facing === -1 && b.facing === 1,
+    `a at ${a.x.toFixed(0)} facing ${a.facing}, b at ${b.x.toFixed(0)} facing ${b.facing}`,
+  );
 }
 
 // the two fighters sharing the Knight must still look different
@@ -515,9 +851,12 @@ check(
   `${bonesA.length} vs ${bonesB.length} bones, shared=${bonesA.filter((b) => bonesB.includes(b)).length}`,
 );
 
-// drive a fighter that has already been through the clip sweep, like one
-// mid-match: the animator must recover and take over cleanly
-verifyDriveLoop(models.get("blaze")!, "blaze");
+// drive every fighter that has already been through the clip sweep, like six
+// fighters mid-match: the animator must recover and take over cleanly, and an
+// armed fighter's blade work must peak on its own hit frames too
+for (const theme of CHARACTERS) {
+  verifyDriveLoop(models.get(theme.id)!, theme.id);
+}
 
 console.log(
   failures === 0

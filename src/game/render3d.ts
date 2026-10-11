@@ -1,11 +1,6 @@
 import * as THREE from "three";
 import { MOVE_BY_ID } from "./combos";
-import {
-  getCharacter,
-  getProportions,
-  type CharacterTheme,
-  type Proportions,
-} from "./characters";
+import { getCharacter, type CharacterTheme, type Proportions } from "./characters";
 import { baseStance, rigPoseFor, type Pose3 } from "./animation";
 import {
   disposeFighterModel,
@@ -13,6 +8,7 @@ import {
   lookFor,
   modelsAvailable,
   MODELS,
+  rigProportionsFor,
   updateFighterModel,
   type FighterModel,
 } from "./models";
@@ -1224,8 +1220,8 @@ export class ThreeRenderer {
     this.disposables.push(this.dustGeo, dustMat);
 
     this.rigs = [
-      buildFighterRig(getProportions("blaze"), this.disposables),
-      buildFighterRig(getProportions("frost"), this.disposables),
+      buildFighterRig(rigProportionsFor(getCharacter("blaze")), this.disposables),
+      buildFighterRig(rigProportionsFor(getCharacter("frost")), this.disposables),
     ];
     this.rigs[0].root.position.x = -400;
     this.rigs[1].root.position.x = 400;

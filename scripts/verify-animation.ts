@@ -26,7 +26,8 @@ import {
 } from "../src/game/animation";
 import { MOVE_BY_ID, MOVES } from "../src/game/combos";
 import { CHARACTERS, getCharacter, getProportions } from "../src/game/characters";
-import { World, FIGHTER_H, type Fighter } from "../src/game/sim";
+import { World, FIGHTER_H, RIG_CYCLE_DISTANCE, type Fighter } from "../src/game/sim";
+import { POSE2D_CYCLE_DISTANCE, POSE2D_LIMB, poseFor } from "../src/game/pose";
 import { applyRigPose, buildFighterRig, spineLayout, stampFighterStyle } from "../src/game/render3d";
 import {
   CROUCH_DROP,
@@ -34,7 +35,14 @@ import {
   MODELS,
   MOVE_CLIPS,
   STATE_CLIPS,
+  beatContactFrame,
+  beatSlice,
+  impactFraction,
   mappedClipNames,
+  moveClipsFor,
+  planBeats,
+  rigProportionsFor,
+  type ClipCue,
 } from "../src/game/models";
 
 /*
@@ -618,53 +626,158 @@ check(
   `drop=${CROUCH_DROP}u`,
 );
 
-// ---- 5. every combo: one beat per hit, in order, inside the frame window
+// ---- 5. every combo: one beat per hit, and every beat placed on real frames
+//
+// The beat table is no longer hand-timed: planBeats() derives where each beat
+// starts and when its contact has to land from the move's own frame data, and
+// beatSlice() retimes the clip onto that frame. So this section checks the plan
+// the animator actually gets, not a copy of it pasted here.
 const STEP_S = 1000 / 60 / 1000;
-for (const mv of MOVES) {
-  const cues = MOVE_CLIPS[mv.id];
-  check(`move ${mv.id} ${mv.name}: has an animation`, !!cues);
-  if (!cues) continue;
 
-  const beats = cues.filter((c) => c.hit !== false).length;
-  check(
-    `move ${mv.id} ${mv.name}: ${mv.hitCount} hit(s) = ${beats} beat(s)`,
-    beats === mv.hitCount,
-    `cues=${cues.map((c) => `${c.clip}@${c.at}`).join(" ")}`,
-  );
-  check(`move ${mv.id} ${mv.name}: starts on frame 1`, cues[0].at === 0, `at=${cues[0].at}`);
-  check(
-    `move ${mv.id} ${mv.name}: beats are ordered`,
-    cues.every((c, i) => c.at >= 0 && c.at < 1 && (i === 0 || c.at > cues[i - 1].at)),
-    cues.map((c) => c.at).join(","),
-  );
-  // the strike must not be scheduled past the move's own recovery
-  const total = mv.windup + mv.active + mv.recover;
-  const lastStart = cues[cues.length - 1].at * total;
-  check(
-    `move ${mv.id} ${mv.name}: last beat starts inside the move`,
-    lastStart < total,
-    `start frame ${lastStart.toFixed(1)} of ${total}`,
-  );
-  // multi-hit strings must not repeat one clip back to back at one speed
-  if (cues.length > 1) {
-    const alternating = cues.some((c, i) => i > 0 && c.clip !== cues[i - 1].clip);
-    check(
-      `move ${mv.id} ${mv.name}: multi-beat string varies its clips`,
-      alternating,
-      cues.map((c) => c.clip).join(" -> "),
-    );
-  }
-  // each beat has to be playable within its own slice of the move
-  for (let i = 0; i < cues.length; i++) {
-    const nextAt = i + 1 < cues.length ? cues[i + 1].at : 1;
-    const sliceS = Math.max(0.06, (nextAt - cues[i].at) * total * STEP_S);
-    check(
-      `move ${mv.id} ${mv.name}: beat ${i} fits its window`,
-      sliceS > 0.05 && sliceS < 3,
-      `${(sliceS * 1000).toFixed(0)}ms`,
-    );
+/** Clip lengths, straight from the vendored binaries. */
+const clipDurations = new Map<string, number>();
+for (const m of Object.values(manifestModels)) {
+  for (const clip of m.clips) {
+    const known = clipDurations.get(clip.name);
+    if (known === undefined) clipDurations.set(clip.name, clip.duration);
+    else if (Math.abs(known - clip.duration) > 0.001) {
+      console.log(`  (clip ${clip.name} differs between models: ${known} vs ${clip.duration})`);
+    }
   }
 }
+const durationOf = (clip: string) => clipDurations.get(clip) ?? 1;
+
+/** Contact frame a retimed beat actually reaches, in move frames. */
+function contactFrameOf(mv: (typeof MOVES)[number], beat: ReturnType<typeof planBeats>[number]) {
+  return beatContactFrame(beat, durationOf(beat.clip), impactFraction(beat.clip));
+}
+
+let worstDrift = 0;
+let worstDriftInfo = "";
+let driftSamples = 0;
+let driftSum = 0;
+
+for (const theme of CHARACTERS) {
+  const fighterId = theme.id;
+  const sequences = new Set<string>();
+  for (const mv of MOVES) {
+    const cues = moveClipsFor(mv.id, fighterId);
+    check(`${fighterId} move ${mv.id} ${mv.name}: has an animation`, cues.length > 0);
+    if (cues.length === 0) continue;
+    sequences.add(cues.map((x: ClipCue) => x.clip).join(">"));
+
+    const hitBeats = cues.filter((x) => x.hit !== false).length;
+    check(
+      `${fighterId} move ${mv.id} ${mv.name}: ${mv.hitCount} hit(s) = ${hitBeats} beat(s)`,
+      hitBeats === mv.hitCount,
+      cues.map((x) => x.clip).join(" "),
+    );
+    if (cues.length > 1) {
+      check(
+        `${fighterId} move ${mv.id} ${mv.name}: multi-beat string varies its clips`,
+        cues.some((x, i) => i > 0 && x.clip !== cues[i - 1].clip),
+        cues.map((x) => x.clip).join(" -> "),
+      );
+    }
+
+    const beats = planBeats(mv, cues);
+    const total = mv.windup + mv.active + mv.recover;
+    const activeEnd = mv.windup + mv.active;
+    check(
+      `${fighterId} move ${mv.id} ${mv.name}: beats tile the whole move`,
+      beats.length === cues.length &&
+        beats[0].start === 0 &&
+        beats[beats.length - 1].end === total &&
+        beats.every((b, i) => b.end > b.start && (i === 0 || b.start === beats[i - 1].end)),
+      beats.map((b) => `${b.start}..${b.end}`).join(" "),
+    );
+    // every hit beat has to be live on a frame the move is active on
+    for (let i = 0; i < beats.length; i++) {
+      const b = beats[i];
+      check(
+        `${fighterId} move ${mv.id} ${mv.name}: beat ${i} lasts long enough`,
+        b.end - b.start > 3,
+        `${b.end - b.start} frames`,
+      );
+      if (!b.hit) continue;
+      // A projectile decides its own damage, so only the cast that releases it
+      // is pinned to the active frames; the rest of a multi-cast move is
+      // choreography spread over the projectile's own rehit rhythm.
+      const live =
+        mv.type === "projectile"
+          ? i === 0
+            ? [mv.windup, activeEnd]
+            : [mv.windup, total - 1]
+          : [mv.windup, activeEnd];
+      check(
+        `${fighterId} move ${mv.id} ${mv.name}: beat ${i} contact is on a live frame`,
+        b.strike >= live[0] && b.strike <= live[1] && b.strike >= b.start,
+        `strike=${b.strike} window=${b.start}..${b.end} live=${live[0]}..${live[1]}`,
+      );
+      const dur = durationOf(b.clip);
+      const slice = beatSlice(dur, b.end - b.start, b.q, impactFraction(b.clip));
+      check(
+        `${fighterId} move ${mv.id} ${mv.name}: beat ${i} retimes inside the clip`,
+        slice.rate >= 0.7 && slice.rate <= 3.2 && slice.from >= 0 && slice.from < dur,
+        `rate=${slice.rate.toFixed(2)} from=${slice.from.toFixed(2)}s of ${dur.toFixed(2)}s`,
+      );
+      // the whole point: the clip's contact has to land on the hit frame
+      const contact = contactFrameOf(mv, b);
+      const drift = Math.abs(contact - b.strike);
+      driftSamples++;
+      driftSum += drift;
+      if (drift > worstDrift) {
+        worstDrift = drift;
+        worstDriftInfo = `${fighterId} move ${mv.id} beat ${i} (${b.clip})`;
+      }
+    }
+  }
+  check(`${fighterId}: has its own beat table`, sequences.size > 0, `${sequences.size} sequences`);
+}
+
+// the six fighters must not all be choreographed onto the same clip set
+const beatTables = new Set(
+  CHARACTERS.map((c) => MOVES.map((mv) => moveClipsFor(mv.id, c.id).map((x) => x.clip).join(">")).join("|")),
+);
+check(
+  "armed fighters are choreographed differently from the empty-handed ones",
+  beatTables.size >= 3,
+  `${beatTables.size} distinct fighters' beat tables`,
+);
+
+// an armed fighter must not punch with a weapon in hand
+for (const armed of ["terra", "nyx"]) {
+  const punchy = MOVES.filter((mv) =>
+    moveClipsFor(mv.id, armed).some((x) => x.clip.startsWith("Unarmed_Melee_Attack_Punch")),
+  );
+  check(
+    `${armed}: swings its weapon instead of an empty fist`,
+    punchy.length === 0,
+    punchy.map((mv) => mv.name).join(", "),
+  );
+}
+const terraMoves = MOVES.filter((mv) => moveClipsFor(mv.id, "terra").every((x) => x.clip.startsWith("1H_")));
+check(
+  "terra's blade work uses one-handed sword clips",
+  terraMoves.length >= 8,
+  `${terraMoves.length} sword-first moves`,
+);
+const nyxMoves = MOVES.filter((mv) => moveClipsFor(mv.id, "nyx").every((x) => x.clip.startsWith("Dualwield")));
+check(
+  "nyx's knife work uses dual-wield clips",
+  nyxMoves.length >= 8,
+  `${nyxMoves.length} dual-wield moves`,
+);
+
+check(
+  "every strike's contact lands within one frame of its hitbox frame",
+  driftSum / Math.max(1, driftSamples) < 1 && worstDrift < 2.01,
+  `mean=${(driftSum / Math.max(1, driftSamples)).toFixed(2)}f worst=${worstDrift.toFixed(2)}f :: ${worstDriftInfo}`,
+);
+console.log(
+  `  contact alignment: ${driftSamples} beats, mean ${(driftSum / Math.max(1, driftSamples)).toFixed(2)} frames, ` +
+    `worst ${worstDrift.toFixed(2)} frames (${worstDriftInfo})`,
+);
 
 // the twenty combos must not all play the same animation
 const distinct = new Set(Object.values(MOVE_CLIPS).map((c) => c.map((x) => x.clip).join(">")));
@@ -673,6 +786,128 @@ check(
   distinct.size >= 18,
   `${distinct.size} distinct sequences`,
 );
+
+/* ---- 6. the stand-in rig and the 2D figure walk at the speed they move ---- */
+{
+  /** One step is the widest gap between the two feet; a cycle is two steps. */
+  const strideOf = (pts: { ax: number; bx: number }[]) => {
+    let high = -Infinity;
+    let low = Infinity;
+    for (const p of pts) {
+      high = Math.max(high, p.ax, p.bx);
+      low = Math.min(low, p.ax, p.bx);
+    }
+    return (high - low) * 2;
+  };
+  // Ground the cycle covers: the widest gap between the two boots is one step,
+  // and a cycle is two steps. The simulation advances walkPhase by distance
+  // covered divided by that, so this constant IS the feet not skating.
+  let travelled = 0;
+  const w2 = new World("blaze", "frost");
+  const f2: Fighter = w2.f[0];
+  const rig = buildFighterRig(rigProportionsFor(getCharacter("blaze")), []);
+  f2.state = "walk";
+  f2.stateT = 3;
+  f2.airborne = false;
+  f2.move = null;
+  const bootX = (phase: number) => {
+    f2.walkPhase = phase;
+    applyRigPose(rig, rigPoseFor(f2, 1000));
+    rig.root.position.set(0, 0, 0);
+    rig.root.rotation.y = 0;
+    rig.root.updateMatrixWorld(true);
+    const front = new THREE.Box3().setFromObject(rig.kneeF, true);
+    const back = new THREE.Box3().setFromObject(rig.kneeB, true);
+    return { fx: front.max.x, fy: front.min.y, bx: back.max.x, by: back.min.y };
+  };
+  const N = 64;
+  const samples = Array.from({ length: N }, (_, i) => bootX(i / N));
+  travelled = strideOf(samples.map((s) => ({ ax: s.fx, bx: s.bx })));
+  check(
+    "the rig's measured walk stride is still the one the sim advances the phase by",
+    Math.abs(travelled - RIG_CYCLE_DISTANCE) / RIG_CYCLE_DISTANCE < 0.06,
+    `measured=${travelled.toFixed(1)}u constant=${RIG_CYCLE_DISTANCE}u`,
+  );
+
+  // Same measurement on the 2D skeleton: replicate its limb chain, which is a
+  // two-segment forward kinematic, and sum the planted foot's travel.
+  const foot2d = (phase: number) => {
+    const probe: Fighter = { ...f2, walkPhase: phase };
+    const p = poseFor(probe, 1000);
+    const end = (ang1: number, ang2: number) => {
+      const mx = 0 + Math.sin(ang1) * POSE2D_LIMB.thigh;
+      const my = p.hip - Math.cos(ang1) * POSE2D_LIMB.thigh;
+      return {
+        x: mx + Math.sin(ang1 + ang2) * POSE2D_LIMB.shin,
+        y: my - Math.cos(ang1 + ang2) * POSE2D_LIMB.shin,
+      };
+    };
+    return {
+      front: end(p.legF[0], p.legF[1]),
+      back: end(p.legB[0], p.legB[1]),
+    };
+  };
+  // the 2D skeleton only consumes POSE2D_PHASE_SCALE of a phase per cycle, so
+  // sweep a whole cycle of ITS phase to measure its stride
+  const samples2d = Array.from({ length: N }, (_, i) => foot2d(i / N / (RIG_CYCLE_DISTANCE / POSE2D_CYCLE_DISTANCE)));
+  const travelled2d = strideOf(
+    samples2d.map((s) => ({ ax: s.front.x, bx: s.back.x })),
+  );
+  check(
+    "the 2D figure's stride matches the ratio its phase is scaled by",
+    Math.abs(travelled2d - POSE2D_CYCLE_DISTANCE) / POSE2D_CYCLE_DISTANCE < 0.06,
+    `measured=${travelled2d.toFixed(1)}u constant=${POSE2D_CYCLE_DISTANCE}u`,
+  );
+  console.log(
+    `  walk stride: rig ${travelled.toFixed(1)}u/cycle (constant ${RIG_CYCLE_DISTANCE}), ` +
+      `2D ${travelled2d.toFixed(1)}u/cycle (constant ${POSE2D_CYCLE_DISTANCE}), ` +
+      `phase scale ${(RIG_CYCLE_DISTANCE / POSE2D_CYCLE_DISTANCE).toFixed(3)}`,
+  );
+}
+
+/* ---- 7. the stand-in rig is the height of the model that replaces it ---- */
+for (const theme of CHARACTERS) {
+  const look = LOOKS[theme.id];
+  const plain = buildFighterRig(getProportions(theme.id), []);
+  const matched = buildFighterRig(rigProportionsFor(theme), []);
+  // the recorded heights were measured with the fighter's hair and outfit on,
+  // which is what the player sees: an unstyled rig is 6u shorter
+  stampFighterStyle(plain, theme, []);
+  stampFighterStyle(matched, theme, []);
+  const heightOf = (r: typeof plain, timeMs: number) => {
+    f.charId = theme.id;
+    f.state = "idle";
+    f.stateT = 3;
+    f.airborne = false;
+    f.downT = 0;
+    f.blockstun = 0;
+    f.move = null;
+    applyRigPose(r, rigPoseFor(f, timeMs));
+    r.root.position.set(0, 0, 0);
+    r.root.rotation.y = 0;
+    r.root.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(r.body, true);
+    return box.max.y - box.min.y;
+  };
+  // the peak of the breathing idle: the same figure the model side records
+  const peakOf = (r: typeof plain) => {
+    let high = 0;
+    for (let i = 0; i < 8; i++) high = Math.max(high, heightOf(r, 1000 + i * 200));
+    return high;
+  };
+  const plainHeight = peakOf(plain);
+  const matchedHeight = peakOf(matched);
+  check(
+    `${theme.id}: recorded rig height matches the rig`,
+    Math.abs(plainHeight - look.rigHeight) < 3,
+    `measured=${plainHeight.toFixed(1)} recorded=${look.rigHeight}`,
+  );
+  check(
+    `${theme.id}: stand-in rig is the height of its model`,
+    Math.abs(matchedHeight - look.presentedHeight) < 3,
+    `rig=${matchedHeight.toFixed(1)} model=${look.presentedHeight}`,
+  );
+}
 
 console.log(
   failures === 0

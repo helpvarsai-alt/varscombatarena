@@ -17,6 +17,19 @@ export type MoveType =
   | "aerial"
   | "ulti";
 
+/**
+ * Frames between two hits of the same multi-hit move.
+ *
+ * The animation layer plans its beats from this exact rule, so a strike is
+ * never choreographed onto a frame the hitbox cannot reach.
+ */
+export function rehitGap(mv: MoveData): number {
+  return Math.max(9, Math.floor(mv.active / Math.max(1, mv.hitCount)) + 4);
+}
+
+/** Frames between two hits from the same projectile. */
+export const PROJECTILE_REHIT = 14;
+
 export interface MoveData {
   id: number;
   name: string;

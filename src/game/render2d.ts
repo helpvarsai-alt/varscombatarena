@@ -1,6 +1,6 @@
 import { MOVE_BY_ID } from "./combos";
 import { getCharacter, type CharacterTheme } from "./characters";
-import { poseFor, swingOf, type Pose } from "./pose";
+import { POSE2D_LIMB, poseFor, swingOf, type Pose } from "./pose";
 import { FIGHTER_H, STAGE, type Fighter, type FxEvent, type World } from "./sim";
 
 /**
@@ -512,7 +512,18 @@ export class CanvasRenderer {
     }
 
     // back limbs (darker)
-    this.drawSegment(ctx, 0, hipY, p.legB[0], 40, p.legB[1], 40, shade(suit, -28), 15, 12);
+    this.drawSegment(
+      ctx,
+      0,
+      hipY,
+      p.legB[0],
+      POSE2D_LIMB.thigh,
+      p.legB[1],
+      POSE2D_LIMB.shin,
+      shade(suit, -28),
+      15,
+      12,
+    );
     this.drawSegment(ctx, shoulderX, shoulderY, p.armB[0], 32, p.armB[1], 30, shade(skin, -26), 11, 9);
 
     // torso
@@ -557,7 +568,18 @@ export class CanvasRenderer {
     ctx.globalAlpha = 1;
 
     // front limbs
-    this.drawSegment(ctx, 0, hipY, p.legF[0], 40, p.legF[1], 40, suit, 16, 13);
+    this.drawSegment(
+      ctx,
+      0,
+      hipY,
+      p.legF[0],
+      POSE2D_LIMB.thigh,
+      p.legF[1],
+      POSE2D_LIMB.shin,
+      suit,
+      16,
+      13,
+    );
     const hand = this.drawSegment(
       ctx,
       shoulderX,
