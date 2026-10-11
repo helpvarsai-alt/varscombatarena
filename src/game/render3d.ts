@@ -32,9 +32,18 @@ import { STAGE, type Fighter, type FxEvent, type World } from "./sim";
 /*  pure three.js object-graph code with no WebGL, so its silhouette can be    */
 /*  measured headlessly by scripts/verify-animation.ts.                        */
 /*                                                                            */
-/*  Mobile budget: no shadow maps (textured blob shadows), a fixed-size spark  */
-/*  pool plus a soft dust pool, low-segment capsules/cylinders, a capped       */
-/*  device pixel ratio and a lens that widens on tall screens.                 */
+/*  Arena: four depth tiers — the steel deck the fighters stand on, a ringside  */
+/*  rail and pylons, a wall of lit steel bays with buttress columns behind it,  */
+/*  and a skyline the fog dissolves into the sky gradient. One warm key, a cool */
+/*  fill and a warm rim light it, and a small PMREM room lets the steel and the */
+/*  GLB armour answer the light instead of reading flat.                        */
+/*                                                                            */
+/*  Mobile budget: no shadow maps (textured contact shadows), a fixed-size      */
+/*  spark pool plus a soft dust pool, low-segment capsules/cylinders, a capped  */
+/*  device pixel ratio, no post-processing and no pass beyond the main one. A   */
+/*  quality tier picks the starting settings — MSAA, env map, dynamic fighter   */
+/*  lights, crowd density — and the paint resolution ratchets down on its own   */
+/*  if frames actually run long, shedding the far decoration layers after that. */
 /* ========================================================================== */
 
 type Disposable = { dispose(): void };
@@ -100,12 +109,31 @@ let texRing: THREE.CanvasTexture | null = null;
 let texStar: THREE.CanvasTexture | null = null;
 let texFloor: THREE.CanvasTexture | null = null;
 let texSky: THREE.CanvasTexture | null = null;
+let texBackdrop: THREE.CanvasTexture | null = null;
+let texEmblem: THREE.CanvasTexture | null = null;
+let texLoading: THREE.CanvasTexture | null = null;
+
+/** Reused every frame so particle/trail colours never allocate. */
+const scratchColor = new THREE.Color();
 
 function canvas(size: number) {
   const c = document.createElement("canvas");
   c.width = size;
   c.height = size;
   return c;
+}
+
+function canvasWH(w: number, h: number) {
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  return c;
+}
+
+/** Deterministic noise so the arena (and its screenshots) never flicker. */
+function seededRnd(seed: number) {
+  let s = seed;
+  return () => ((s = (s * 16807) % 2147483647) / 2147483647);
 }
 
 /** Soft radial falloff — aura sprites, dust points, light pools. */
@@ -128,14 +156,20 @@ function glowTexture() {
   return texGlow;
 }
 
-/** Dark-centred disc used for blob shadows. */
+/**
+ * Contact shadow: a dense core with a long soft falloff. One quad per fighter
+ * replaces a shadow map entirely, so grounding the fighters costs two textured
+ * quads rather than an extra render pass — the mobile-friendly choice.
+ */
 function discTexture() {
   if (texDisc) return texDisc;
   const c = canvas(128);
   const ctx = c.getContext("2d")!;
-  const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 62);
-  g.addColorStop(0, "rgba(0,0,0,0.9)");
-  g.addColorStop(0.5, "rgba(0,0,0,0.55)");
+  const g = ctx.createRadialGradient(64, 64, 3, 64, 64, 63);
+  g.addColorStop(0, "rgba(0,0,0,0.97)");
+  g.addColorStop(0.26, "rgba(0,0,0,0.82)");
+  g.addColorStop(0.52, "rgba(0,0,0,0.44)");
+  g.addColorStop(0.78, "rgba(0,0,0,0.13)");
   g.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 128, 128);
@@ -188,49 +222,185 @@ function starTexture() {
   return texStar;
 }
 
-/** Arena floor plate: dark concrete with a lit grid. */
+/**
+ * Arena deck plate: worn dark steel with panel seams and a faint machined
+ * grain. Neutral charcoal, not blue — the lighting supplies the colour.
+ */
 function floorTexture() {
   if (texFloor) return texFloor;
   const c = canvas(256);
   const ctx = c.getContext("2d")!;
-  const g = ctx.createRadialGradient(128, 128, 8, 128, 128, 150);
-  g.addColorStop(0, "#232a41");
-  g.addColorStop(1, "#0b1020");
-  ctx.fillStyle = g;
+  const rnd = seededRnd(90210);
+  ctx.fillStyle = "#23262b";
   ctx.fillRect(0, 0, 256, 256);
-  ctx.strokeStyle = "rgba(120,190,255,0.17)";
-  ctx.lineWidth = 2;
-  for (let i = 0; i <= 4; i++) {
-    const p = (i / 4) * 256;
+  // brushed grain: long thin strokes in a narrow value band
+  for (let i = 0; i < 1400; i++) {
+    const v = 30 + Math.floor(rnd() * 26);
+    ctx.fillStyle = `rgba(${v},${v + 2},${v + 5},${0.04 + rnd() * 0.07})`;
+    ctx.fillRect(rnd() * 256, rnd() * 256, 8 + rnd() * 46, 1);
+  }
+  // panel seams: dark groove plus a single lit edge so plates read as metal
+  for (let i = 0; i <= 2; i++) {
+    const p = (i / 2) * 256;
+    ctx.strokeStyle = "rgba(9,10,13,0.9)";
+    ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(p, 0);
     ctx.lineTo(p, 256);
     ctx.moveTo(0, p);
     ctx.lineTo(256, p);
     ctx.stroke();
+    ctx.strokeStyle = "rgba(150,152,150,0.13)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(p + 2.5, 0);
+    ctx.lineTo(p + 2.5, 256);
+    ctx.moveTo(0, p + 2.5);
+    ctx.lineTo(256, p + 2.5);
+    ctx.stroke();
   }
   texFloor = new THREE.CanvasTexture(c);
   texFloor.wrapS = texFloor.wrapT = THREE.RepeatWrapping;
-  texFloor.repeat.set(5, 3);
+  texFloor.repeat.set(6, 4);
+  texFloor.anisotropy = 4;
   texFloor.colorSpace = THREE.SRGBColorSpace;
   return texFloor;
 }
 
-/** Vertical sky gradient used as the scene background. */
+/**
+ * Vertical gradient behind everything: cold charcoal overhead resolving into a
+ * band of warm haze at the horizon, so the arena reads as a lit space rather
+ * than a coloured backdrop.
+ */
 function skyTexture() {
   if (texSky) return texSky;
   const c = canvas(128);
   const ctx = c.getContext("2d")!;
   const g = ctx.createLinearGradient(0, 0, 0, 128);
-  g.addColorStop(0, "#04050c");
-  g.addColorStop(0.4, "#0a1124");
-  g.addColorStop(0.72, "#1a1b3c");
-  g.addColorStop(1, "#3c1f45");
+  g.addColorStop(0, "#05070b");
+  g.addColorStop(0.42, "#0a0d13");
+  g.addColorStop(0.74, "#151820");
+  g.addColorStop(0.93, "#2a2620");
+  g.addColorStop(1, "#3a3229");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 128, 128);
   texSky = new THREE.CanvasTexture(c);
   texSky.colorSpace = THREE.SRGBColorSpace;
   return texSky;
+}
+
+/**
+ * Backdrop card gradient: darker at fighter height, lifting slightly toward the
+ * base and fading out at the top. Gives the fight plane a quiet plate to read
+ * against without a hard horizon line.
+ */
+function backdropTexture() {
+  if (texBackdrop) return texBackdrop;
+  const c = canvasWH(8, 256);
+  const ctx = c.getContext("2d")!;
+  const g = ctx.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, "#0a0c11");
+  g.addColorStop(0.5, "#13161c");
+  g.addColorStop(0.86, "#1c1e22");
+  g.addColorStop(1, "#29251f");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 8, 256);
+  texBackdrop = new THREE.CanvasTexture(c);
+  texBackdrop.wrapS = texBackdrop.wrapT = THREE.ClampToEdgeWrapping;
+  texBackdrop.colorSpace = THREE.SRGBColorSpace;
+  return texBackdrop;
+}
+
+/** Ring decal at the centre of the deck: two rings and a tick crown. */
+function emblemTexture() {
+  if (texEmblem) return texEmblem;
+  const S = 512;
+  const c = canvas(S);
+  const ctx = c.getContext("2d")!;
+  ctx.translate(S / 2, S / 2);
+  ctx.strokeStyle = "rgba(255,240,220,0.75)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(0, 0, S * 0.42, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(255,236,210,0.42)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, S * 0.33, 0, Math.PI * 2);
+  ctx.stroke();
+  for (let i = 0; i < 32; i++) {
+    const a = (i / 32) * Math.PI * 2;
+    const long = i % 4 === 0;
+    ctx.strokeStyle = long
+      ? "rgba(255,238,214,0.5)"
+      : "rgba(255,238,214,0.22)";
+    ctx.lineWidth = long ? 3 : 1.5;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * S * 0.42, Math.sin(a) * S * 0.42);
+    ctx.lineTo(
+      Math.cos(a) * S * (long ? 0.47 : 0.455),
+      Math.sin(a) * S * (long ? 0.47 : 0.455),
+    );
+    ctx.stroke();
+  }
+  ctx.strokeStyle = "rgba(255,228,200,0.16)";
+  ctx.lineWidth = 26;
+  ctx.beginPath();
+  ctx.arc(0, 0, S * 0.2, 0, Math.PI * 2);
+  ctx.stroke();
+  texEmblem = new THREE.CanvasTexture(c);
+  texEmblem.colorSpace = THREE.SRGBColorSpace;
+  return texEmblem;
+}
+
+/** Tag drawn above a fighter while its skinned model is still downloading. */
+function loadingTexture() {
+  if (texLoading) return texLoading;
+  const c = canvasWH(256, 64);
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "rgba(10,12,16,0.55)";
+  ctx.fillRect(0, 26, 256, 20);
+  ctx.strokeStyle = "rgba(255,220,174,0.55)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 26.5, 255, 19);
+  ctx.fillStyle = "rgba(255,232,203,0.95)";
+  ctx.font = "600 11px ui-monospace, Menlo, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("LOADING MODEL", 128, 36);
+  texLoading = new THREE.CanvasTexture(c);
+  texLoading.colorSpace = THREE.SRGBColorSpace;
+  return texLoading;
+}
+
+/**
+ * Tiny equirectangular gradient pushed through PMREM to give every standard
+ * material a plausible room: warm overhead key, cool sides, dark floor.
+ * Cheap once (one 128x64 canvas) and it is what makes the steel read as metal.
+ */
+function environmentTexture() {
+  const c = canvasWH(128, 64);
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "#101216";
+  ctx.fillRect(0, 0, 128, 64);
+  // ceiling: a broad warm light source with a cool bounce either side
+  const top = ctx.createLinearGradient(0, 0, 0, 22);
+  top.addColorStop(0, "#d8c7a8");
+  top.addColorStop(1, "#3a352c");
+  ctx.fillStyle = top;
+  ctx.fillRect(0, 0, 128, 22);
+  ctx.fillStyle = "rgba(120,150,200,0.35)";
+  ctx.fillRect(0, 20, 44, 14);
+  ctx.fillRect(84, 20, 44, 14);
+  const bot = ctx.createLinearGradient(0, 34, 0, 64);
+  bot.addColorStop(0, "#1a1712");
+  bot.addColorStop(1, "#0b0c0f");
+  ctx.fillStyle = bot;
+  ctx.fillRect(0, 34, 128, 30);
+  const t = new THREE.CanvasTexture(c);
+  t.mapping = THREE.EquirectangularReflectionMapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }
 
 /* ---------------------------------- rig ---------------------------------- */
@@ -360,7 +530,13 @@ function makeRigMats(disposables: Disposable[]): RigMats {
   const std = (color: number, opts: Partial<THREE.MeshStandardMaterialParameters> = {}) =>
     track(
       disposables,
-      new THREE.MeshStandardMaterial({ color, roughness: 0.62, metalness: 0.06, ...opts }),
+      new THREE.MeshStandardMaterial({
+        color,
+        roughness: 0.62,
+        metalness: 0.06,
+        envMapIntensity: 0.75,
+        ...opts,
+      }),
     );
   return {
     suit: std(0x8899ff),
@@ -568,6 +744,8 @@ export function buildFighterRig(prop: Proportions, disposables: Disposable[]): R
   const legB = buildLeg(true);
 
   /* ---- aura, ring, shadow, light ---- */
+  // A restrained halo, not an aura: it lifts the fighter off the dark deck
+  // without swallowing the silhouette.
   const glow = new THREE.Sprite(
     track(
       disposables,
@@ -575,24 +753,24 @@ export function buildFighterRig(prop: Proportions, disposables: Disposable[]): R
         map: glowTexture(),
         color: 0xffffff,
         transparent: true,
-        opacity: 0.4,
+        opacity: 0.2,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       }),
     ),
   );
-  glow.scale.set(300, 300, 1);
+  glow.scale.set(160, 160, 1);
   glow.position.y = 78;
   root.add(glow);
 
   const ring = new THREE.Mesh(
-    geo(new THREE.TorusGeometry(56, 2.6, 6, 36)),
+    geo(new THREE.TorusGeometry(44, 1.9, 6, 36)),
     track(
       disposables,
       new THREE.MeshBasicMaterial({
         color: 0xffffff,
         transparent: true,
-        opacity: 0.65,
+        opacity: 0.45,
         toneMapped: false,
       }),
     ),
@@ -618,8 +796,8 @@ export function buildFighterRig(prop: Proportions, disposables: Disposable[]): R
   shadow.position.y = 0.8;
   root.add(shadow);
 
-  const light = new THREE.PointLight(0xffffff, 0, 560, 2);
-  light.position.y = 100;
+  const light = new THREE.PointLight(0xffffff, 0, 320, 2);
+  light.position.y = 92;
   root.add(light);
 
   return {
@@ -890,6 +1068,41 @@ export function applyRigPose(rig: Rig, p: Pose3) {
 /*  renderer                                                                  */
 /* ========================================================================== */
 
+/* ------------------------------ art direction ----------------------------- */
+/*  Cinematic dark steel: charcoal masses, restrained warm-metal highlights and
+    one cool fill. Collected here so the geometry, the lights and the fighters
+    all agree on the palette. */
+const STEEL = {
+  deck: 0x2b3036,
+  plate: 0x1c2025,
+  beam: 0x15181d,
+  deep: 0x0d0f13,
+  far: 0x090a0d,
+  trim: 0x93989e,
+  warm: 0xffdcae,
+  warmDeep: 0xd08f45,
+  cool: 0x8098cc,
+} as const;
+
+type QualityTier = "high" | "low";
+
+/**
+ * Pick a starting quality tier from cheap, widely-supported device hints.
+ * Deliberately conservative: it only chooses the *initial* settings, and the
+ * renderer walks pixel ratio back down from there if frames actually run slow.
+ */
+function detectQualityTier(): QualityTier {
+  if (typeof navigator === "undefined" || typeof window === "undefined") return "high";
+  const cores = navigator.hardwareConcurrency || 4;
+  const memory =
+    (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4;
+  const coarse = window.matchMedia?.("(pointer: coarse)")?.matches ?? false;
+  const dpr = window.devicePixelRatio || 1;
+  if (cores <= 4 && memory <= 3) return "low";
+  if (coarse && cores <= 6 && dpr >= 3) return "low";
+  return "high";
+}
+
 export class ThreeRenderer {
   canvas: HTMLCanvasElement;
   private renderer: THREE.WebGLRenderer;
@@ -910,6 +1123,8 @@ export class ThreeRenderer {
   private waves: Shockwave[] = [];
   private flashes: Flash[] = [];
   private projMeshes = new Map<number, THREE.Group>();
+  /** reused each frame so projectile bookkeeping allocates nothing */
+  private liveProjectiles = new Set<number>();
   private models: (FighterModel | null)[] = [null, null];
   /** bumped whenever a slot's character changes, so late loads are discarded */
   private modelToken = [0, 0];
@@ -917,6 +1132,17 @@ export class ThreeRenderer {
   private modelLoading = [false, false];
   private modelLoadBadges: (THREE.Mesh | null)[] = [null, null];
   private disposables: Disposable[] = [];
+  /** decorations that can be dropped if frames run long (layered background) */
+  private decor: THREE.Object3D[] = [];
+  private envTarget: THREE.WebGLRenderTarget | null = null;
+  private tier: QualityTier;
+  private maxPixelRatio: number;
+  private paintRatio: number;
+  private frameAvg = 16.7;
+  private frameCount = 0;
+  private stressed = 0;
+  /** fastest frame seen: the device's own refresh floor, not a performance cap */
+  private vsyncFloor = 16.7;
   private camX = 600;
   private camZ = 1200;
   private camY = 176;
@@ -930,18 +1156,30 @@ export class ThreeRenderer {
       "position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;";
     container.appendChild(this.canvas);
 
+    this.tier = detectQualityTier();
+    // MSAA is only worth its bandwidth when there is headroom for it; on the
+    // low tier the capped pixel ratio (plus the mostly-straight arena edges)
+    // keeps aliasing acceptable at a fraction of the cost.
+    this.maxPixelRatio = this.tier === "high" ? 1.8 : 1;
+    this.paintRatio = this.maxPixelRatio;
+
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
-      antialias: false,
+      antialias: this.tier === "high",
       powerPreference: "high-performance",
       alpha: false,
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.8));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.maxPixelRatio));
+    this.paintRatio = this.renderer.getPixelRatio();
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.2;
 
     this.scene.background = skyTexture();
-    this.scene.fog = new THREE.Fog(0x0a1024, 1600, 3600);
+    // Warm-charcoal haze: distant tiers lose contrast instead of colour, which
+    // is what gives the layered background its depth.
+    this.scene.fog = new THREE.Fog(0x14161a, 1500, 4200);
+
+    if (this.tier === "high") this.buildEnvironment();
 
     this.buildArena();
 
@@ -992,6 +1230,11 @@ export class ThreeRenderer {
     this.rigs[0].root.position.x = -400;
     this.rigs[1].root.position.x = 400;
     this.scene.add(this.rigs[0].root, this.rigs[1].root);
+    if (this.tier === "low") {
+      // two dynamic point lights are paid for by every shaded pixel; the deck,
+      // the emblem and the warm key already ground the fighters visually
+      for (const rig of this.rigs) rig.light.visible = false;
+    }
   }
 
   /* -------------------------------- helpers -------------------------------- */
@@ -1002,7 +1245,13 @@ export class ThreeRenderer {
 
   private standard(color: number, opts: Partial<THREE.MeshStandardMaterialParameters> = {}) {
     return this.track(
-      new THREE.MeshStandardMaterial({ color, roughness: 0.62, metalness: 0.06, ...opts }),
+      new THREE.MeshStandardMaterial({
+        color,
+        roughness: 0.62,
+        metalness: 0.06,
+        envMapIntensity: 0.75,
+        ...opts,
+      }),
     );
   }
 
@@ -1022,11 +1271,11 @@ export class ThreeRenderer {
     );
   }
 
-  /** Additive glow for a quad on the floor (a Mesh, not a Sprite). */
-  private glowQuad(color: number, opacity: number) {
+  /** Additive floor decal (a Mesh, not a Sprite) — emblem, washes. */
+  private decal(texture: THREE.Texture, color: number, opacity: number) {
     return this.track(
       new THREE.MeshBasicMaterial({
-        map: glowTexture(),
+        map: texture,
         color,
         transparent: true,
         opacity,
@@ -1039,82 +1288,207 @@ export class ThreeRenderer {
 
   /* --------------------------------- arena --------------------------------- */
 
+  /**
+   * The arena, built as four depth tiers instead of one flat backdrop:
+   *
+   *   0. deck       — the fighting plane: steel slab, warm trim, inlaid guides,
+   *                   centre emblem. Top face sits at exactly y = 0.
+   *   1. ringside   — rail and pylons with restrained warm highlight bands.
+   *   2. structure  — a steel wall of lit bays, then buttress columns.
+   *   3. distance   — block skyline that the fog dissolves into the sky.
+   *
+   * Nothing here adds a render pass: no shadow maps, no per-frame decals, no
+   * neon rims. Grey masses, one warm accent and the existing fog carry it.
+   */
   private buildArena() {
     const center = (STAGE.minX + STAGE.maxX) / 2;
     const span = STAGE.maxX - STAGE.minX;
+    const rnd = seededRnd(1337);
+    const low = this.tier === "low";
 
-    let seed = 1337;
-    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const add = (m: THREE.Object3D) => this.scene.add(m);
+    const box = (w: number, h: number, d: number) =>
+      this.track(new THREE.BoxGeometry(w, h, d));
 
-    // floor
-    const floorGeo = this.track(new THREE.PlaneGeometry(4600, 2400));
-    const floorMat = this.standard(0xffffff, { roughness: 0.88, metalness: 0.14 });
-    floorMat.map = floorTexture();
-    const floor = new THREE.Mesh(floorGeo, floorMat);
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.set(center, 0, 0);
-    this.scene.add(floor);
+    /* -------------------------------- tier 0 ------------------------------- */
+    const plateMat = this.standard(STEEL.plate, { roughness: 0.5, metalness: 0.42 });
+    const deckMat = this.standard(0xffffff, { roughness: 0.74, metalness: 0.22 });
+    deckMat.map = floorTexture();
+    // slab whose top face is exactly y = 0, matching STAGE.floorY
+    const deck = new THREE.Mesh(box(span + 420, 30, 760), plateMat);
+    deck.position.set(center, -15, 0);
+    add(deck);
+    const surface = new THREE.Mesh(box(span + 404, 6, 744), deckMat);
+    surface.position.set(center, -3, 0);
+    add(surface);
 
-    // raised fighting platform
-    const platGeo = this.track(new THREE.BoxGeometry(span + 300, 16, 500));
-    const plat = new THREE.Mesh(
-      platGeo,
-      this.standard(0x141a2d, { roughness: 0.5, metalness: 0.3 }),
+    const ground = new THREE.Mesh(
+      this.track(new THREE.PlaneGeometry(6400, 3200)),
+      this.standard(STEEL.beam, { roughness: 0.95, metalness: 0.05 }),
     );
-    plat.position.set(center, -8, 0);
-    this.scene.add(plat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.set(center, -0.7, 0);
+    add(ground);
 
-    // neon rim
-    const stripGeo = this.track(new THREE.BoxGeometry(span + 290, 3.6, 3.6));
-    for (const z of [-246, 246]) {
-      const strip = new THREE.Mesh(stripGeo, this.neon(0x4be3ff));
-      strip.position.set(center, 2.6, z);
-      this.scene.add(strip);
+    // warm-metal trim draws the ring edge, with no glow at all
+    const trimMat = this.standard(STEEL.trim, { roughness: 0.3, metalness: 0.8 });
+    const trimGeo = box(span + 416, 5, 5);
+    for (const z of [-378, 378]) {
+      const trim = new THREE.Mesh(trimGeo, trimMat);
+      trim.position.set(center, 0.6, z);
+      add(trim);
+    }
+    const trimEndGeo = box(5, 5, 760);
+    for (const x of [center - (span + 416) / 2, center + (span + 416) / 2]) {
+      const trim = new THREE.Mesh(trimEndGeo, trimMat);
+      trim.position.set(x, 0.6, 0);
+      add(trim);
     }
 
-    // corner posts
-    const postGeo = this.track(new THREE.CylinderGeometry(5, 7, 170, 8));
-    const postMat = this.standard(0x1d263c, { roughness: 0.45, metalness: 0.4 });
-    for (let i = 0; i < 8; i++) {
-      const x = center - (span + 220) / 2 + ((span + 220) / 7) * i;
-      for (const z of [-252, 252]) {
-        const post = new THREE.Mesh(postGeo, postMat);
-        post.position.set(x, 78, z);
-        this.scene.add(post);
+    // inlaid guide lines give the plane a readable depth scale
+    const inlayMat = this.standard(0x3d434a, { roughness: 0.42, metalness: 0.55 });
+    const inlayGeo = box(span - 60, 1.4, 4);
+    for (const z of [-296, 296]) {
+      const inlay = new THREE.Mesh(inlayGeo, inlayMat);
+      inlay.position.set(center, -0.4, z);
+      add(inlay);
+    }
+
+    // centre emblem — the deliberate focal point of the fight plane
+    const emblem = new THREE.Mesh(
+      this.track(new THREE.PlaneGeometry(640, 640)),
+      this.decal(emblemTexture(), STEEL.warm, 0.16),
+    );
+    emblem.rotation.x = -Math.PI / 2;
+    emblem.position.set(center, 0.3, 0);
+    add(emblem);
+
+    /* -------------------------------- tier 1 ------------------------------- */
+    // Low enough that the near rail always projects below the fighters' feet,
+    // however far the tracking camera pulls back (see scripts/verify-arena.ts).
+    const railGeo = box(span + 760, 30, 26);
+    const capGeo = box(span + 760, 5, 32);
+    const railMat = this.standard(STEEL.deep, { roughness: 0.86, metalness: 0.1 });
+    const capMat = this.standard(STEEL.trim, { roughness: 0.36, metalness: 0.7 });
+    for (const z of [-500, 500]) {
+      const rail = new THREE.Mesh(railGeo, railMat);
+      rail.position.set(center, 15, z);
+      add(rail);
+      const cap = new THREE.Mesh(capGeo, capMat);
+      cap.position.set(center, 32, z);
+      add(cap);
+    }
+
+    const pylonGeo = box(48, 480, 48);
+    const bandGeo = box(54, 14, 54);
+    const pylonMat = this.standard(STEEL.plate, { roughness: 0.4, metalness: 0.52 });
+    const bandMat = this.standard(0x1c1813, {
+      roughness: 0.45,
+      metalness: 0.35,
+      emissive: STEEL.warmDeep,
+      emissiveIntensity: 0.85,
+    });
+    // Only outside the fighting span: a column that shares an x with a fighter
+    // would sit between the camera and that fighter at long range and hide it.
+    for (const off of [-1300, -900, 900, 1300]) {
+      for (const z of [-500, 500]) {
+        const pylon = new THREE.Mesh(pylonGeo, pylonMat);
+        pylon.position.set(center + off, 240, z);
+        add(pylon);
+        const band = new THREE.Mesh(bandGeo, bandMat);
+        band.position.set(center + off, 344, z);
+        add(band);
       }
     }
 
-    // LED back wall
-    const wallGeo = this.track(new THREE.BoxGeometry(4600, 700, 18));
-    const wall = new THREE.Mesh(wallGeo, this.standard(0x070b15, { roughness: 0.95 }));
-    wall.position.set(center, 340, -560);
-    this.scene.add(wall);
+    /* -------------------------------- tier 2 ------------------------------- */
+    // the wall the ring fights against: a gradient card plus steel bays with a
+    // low warm under-light, so the tiers separate by tone rather than colour
+    const card = new THREE.Mesh(
+      this.track(new THREE.PlaneGeometry(9000, 1000)),
+      this.track(new THREE.MeshBasicMaterial({ map: backdropTexture() })),
+    );
+    card.position.set(center, 430, -760);
+    add(card);
 
-    const barGeo = this.track(new THREE.BoxGeometry(140, 9, 6));
-    for (let i = -8; i <= 8; i++) {
-      const c = i % 3 === 0 ? 0xff4fa3 : i % 3 === 1 ? 0x4be3ff : 0x9b6bff;
-      const bar = new THREE.Mesh(barGeo, this.neon(c, { transparent: true, opacity: 0.9 }));
-      bar.position.set(center + i * 220, 280 + ((i + 8) % 2) * 110, -546);
-      this.scene.add(bar);
+    const bayGeo = box(760, 520, 60);
+    const sillGeo = box(700, 8, 40);
+    const bayMat = this.standard(STEEL.beam, { roughness: 0.82, metalness: 0.24 });
+    const sillMat = this.standard(0x1a1712, {
+      roughness: 0.5,
+      metalness: 0.3,
+      emissive: STEEL.warmDeep,
+      emissiveIntensity: 0.55,
+    });
+    for (let i = -4; i <= 4; i++) {
+      const x = center + i * 900;
+      const bay = new THREE.Mesh(bayGeo, bayMat);
+      bay.position.set(x, 280, -700);
+      add(bay);
+      const sill = new THREE.Mesh(sillGeo, sillMat);
+      sill.position.set(x, 26, -666);
+      add(sill);
     }
+    const lintel = new THREE.Mesh(box(9200, 40, 80), this.standard(STEEL.deep, { roughness: 0.9 }));
+    lintel.position.set(center, 560, -710);
+    add(lintel);
 
-    // distant skyline
+    const farColumns = new THREE.Group();
+    const columnGeo = box(120, 1300, 120);
+    const columnMat = this.standard(STEEL.far, { roughness: 0.9, metalness: 0.1 });
+    for (let i = 0; i < 11; i++) {
+      const column = new THREE.Mesh(columnGeo, columnMat);
+      column.position.set(center - 4500 + (9000 / 10) * i, 640, -1120);
+      farColumns.add(column);
+    }
+    add(farColumns);
+
+    /* -------------------------------- tier 3 ------------------------------- */
+    const skyline = new THREE.Group();
     const towerGeo = this.track(new THREE.BoxGeometry(1, 1, 1));
-    const towerMat = this.standard(0x0c1322, { roughness: 1 });
-    for (let i = 0; i < 28; i++) {
-      const wd = 130 + rnd() * 240;
-      const hgt = 340 + rnd() * 900;
+    const towerMat = this.standard(STEEL.far, { roughness: 1 });
+    for (let i = 0; i < 30; i++) {
+      const wd = 160 + rnd() * 260;
+      const hgt = 420 + rnd() * 1100;
       const t = new THREE.Mesh(towerGeo, towerMat);
-      t.scale.set(wd, hgt, 130 + rnd() * 150);
-      t.position.set(center + (rnd() - 0.5) * 5600, hgt / 2 - 40, -820 - rnd() * 1000);
-      this.scene.add(t);
+      t.scale.set(wd, hgt, 150 + rnd() * 170);
+      t.position.set(center + (rnd() - 0.5) * 6400, hgt / 2 - 60, -1650 - rnd() * 900);
+      skyline.add(t);
     }
+    add(skyline);
 
-    // crowd silhouettes bobbing behind the platform
+    /* ------------------------------- overhead ------------------------------ */
+    const truss = new THREE.Group();
+    const trussMat = this.standard(STEEL.beam, { roughness: 0.7, metalness: 0.3 });
+    const lampMat = this.standard(0x241d14, {
+      roughness: 0.5,
+      metalness: 0.3,
+      emissive: STEEL.warm,
+      emissiveIntensity: 0.7,
+    });
+    for (const z of [-360, 360]) {
+      const beam = new THREE.Mesh(box(9200, 46, 60), trussMat);
+      beam.position.set(center, 700, z);
+      truss.add(beam);
+    }
+    const lampGeo = box(90, 22, 90);
+    for (let i = 0; i < 8; i++) {
+      const x = center - (span + 2600) / 2 + ((span + 2600) / 7) * i;
+      for (const z of [-360, 360]) {
+        const lamp = new THREE.Mesh(lampGeo, lampMat);
+        lamp.position.set(x, 668, z);
+        truss.add(lamp);
+      }
+    }
+    add(truss);
+
+    /* --------------------------------- crowd ------------------------------- */
+    const crowdGroup = new THREE.Group();
+    const crowdMat = this.standard(STEEL.far, { roughness: 1 });
     const headGeo = this.track(new THREE.CapsuleGeometry(9, 22, 2, 6));
     const bodyGeo = this.track(new THREE.CapsuleGeometry(12, 16, 2, 6));
-    const crowdMat = this.standard(0x080c18, { roughness: 1 });
-    for (let i = 0; i < 28; i++) {
+    const crowdCount = low ? 14 : 30;
+    for (let i = 0; i < crowdCount; i++) {
       const g = new THREE.Group();
       const bodyMesh = new THREE.Mesh(bodyGeo, crowdMat);
       bodyMesh.position.y = 12;
@@ -1122,35 +1496,64 @@ export class ThreeRenderer {
       headMesh.rotation.z = 0.2;
       headMesh.position.y = 32;
       g.add(bodyMesh, headMesh);
-      const x = center - 1000 + (2000 / 27) * i + (rnd() - 0.5) * 40;
-      g.position.set(x, -16, -320 - rnd() * 100);
-      this.scene.add(g);
+      const x =
+        center - 1400 + (2800 / Math.max(1, crowdCount - 1)) * i + (rnd() - 0.5) * 40;
+      g.position.set(x, -14 - rnd() * 26, -600 - rnd() * 160);
+      crowdGroup.add(g);
       this.crowd.push({ group: g, base: g.position.y, phase: rnd() * 6.28 });
     }
+    add(crowdGroup);
 
-    // light pools on the floor
-    const poolGeo = this.track(new THREE.PlaneGeometry(360, 360));
-    for (let i = -2; i <= 2; i++) {
-      const pool = new THREE.Mesh(
-        poolGeo,
-        this.glowQuad(i % 2 === 0 ? 0x2f57b0 : 0x7a3aa8, 0.5),
-      );
-      pool.rotation.x = -Math.PI / 2;
-      pool.position.set(center + i * 480, 1.4, 0);
-      this.scene.add(pool);
+    // Shed furthest-first if frames run long: distance costs contrast anyway.
+    this.decor.push(skyline, truss, crowdGroup, farColumns);
+
+    /* ------------------------------- lighting ------------------------------ */
+    // Soft key from front-right, subtle cool fill from front-left, warm rim from
+    // behind for silhouette separation. The kicker only exists with headroom,
+    // because every extra light costs every shaded pixel on screen.
+    add(new THREE.HemisphereLight(0x66799f, 0x2a2219, 0.5));
+
+    const key = new THREE.DirectionalLight(0xffe8cb, 2.0);
+    key.position.set(center + 460, 1250, 950);
+    key.target.position.set(center, 90, -80);
+    add(key);
+    add(key.target);
+
+    const fill = new THREE.DirectionalLight(0x93a8d4, 0.45);
+    fill.position.set(center - 1150, 430, 850);
+    fill.target.position.set(center, 90, 0);
+    add(fill);
+    add(fill.target);
+
+    const rim = new THREE.DirectionalLight(0xffd2a0, 1.05);
+    rim.position.set(center - 260, 580, -1150);
+    rim.target.position.set(center, 110, 0);
+    add(rim);
+    add(rim.target);
+
+    if (!low) {
+      const kick = new THREE.DirectionalLight(0x7fa4e0, 0.35);
+      kick.position.set(center + 1350, 300, -850);
+      kick.target.position.set(center, 90, 0);
+      add(kick);
+      add(kick.target);
     }
+  }
 
-    // lights
-    this.scene.add(new THREE.HemisphereLight(0x9fb4ff, 0x241436, 1.25));
-    const keyLight = new THREE.DirectionalLight(0xfff2e2, 1.6);
-    keyLight.position.set(center + 520, 940, 760);
-    this.scene.add(keyLight);
-    const rimA = new THREE.DirectionalLight(0xff6fbf, 0.9);
-    rimA.position.set(center - 720, 330, -560);
-    this.scene.add(rimA);
-    const rimB = new THREE.DirectionalLight(0x5fd8ff, 0.75);
-    rimB.position.set(center + 820, 270, -460);
-    this.scene.add(rimB);
+  /**
+   * One small equirect gradient pushed through PMREM, built once at start-up:
+   * it is what makes the steel, the trim and the GLB armour respond like metal
+   * instead of flat diffuse. Skipped entirely on the low tier.
+   */
+  private buildEnvironment() {
+    const source = environmentTexture();
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.envTarget = pmrem.fromEquirectangular(source);
+    this.scene.environment = this.envTarget.texture;
+    // restrained: the room should inform the materials, not light them
+    this.scene.environmentIntensity = 0.8;
+    pmrem.dispose();
+    source.dispose();
   }
 
   /* --------------------------------- resize -------------------------------- */
@@ -1170,6 +1573,9 @@ export class ThreeRenderer {
   }
 
   dispose() {
+    this.envTarget?.dispose();
+    this.envTarget = null;
+    this.scene.environment = null;
     for (const d of this.disposables) d.dispose();
     for (const w of this.waves) {
       w.mesh.geometry.dispose();
@@ -1346,6 +1752,7 @@ export class ThreeRenderer {
 
   render(world: World, timeMs: number, dt: number) {
     const dtS = Math.min(0.05, dt / 1000);
+    this.adaptQuality(dt);
     this.updateCamera(world, timeMs, dtS);
 
     for (let i = 0; i < 2; i++) {
@@ -1411,6 +1818,40 @@ export class ThreeRenderer {
     this.syncModelLoadBadges(timeMs);
     this.renderer.render(this.scene, this.camera);
     this.renderer.info.reset();
+  }
+
+  /**
+   * Only ever a one-way ratchet: if frames genuinely run long the paint
+   * resolution drops a step, and once it is at 1x the furthest decoration
+   * layers are dropped instead. Nothing here can oscillate, and a healthy
+   * device never sees a change at all.
+   */
+  private adaptQuality(dt: number) {
+    if (dt <= 0 || dt > 200) return;
+    if (dt > 3) this.vsyncFloor = Math.min(this.vsyncFloor, dt);
+    this.frameAvg += (dt - this.frameAvg) * 0.05;
+    if (++this.frameCount < 120) return;
+    this.frameCount = 0;
+    // a 30Hz display is not a slow device: compare against its own floor
+    const budget = Math.max(24, this.vsyncFloor * 1.5);
+    if (this.frameAvg <= budget) {
+      this.stressed = 0;
+      return;
+    }
+    // two consecutive slow windows, so one GC hitch cannot change quality
+    if (++this.stressed < 2) return;
+    this.stressed = 0;
+    if (this.paintRatio > 1.01) {
+      this.paintRatio = Math.max(1, +(this.paintRatio - 0.3).toFixed(2));
+      this.renderer.setPixelRatio(this.paintRatio);
+      return;
+    }
+    for (const d of this.decor) {
+      if (d.visible) {
+        d.visible = false;
+        break;
+      }
+    }
   }
 
   private updateCamera(world: World, timeMs: number, dtS: number) {
@@ -1501,7 +1942,9 @@ export class ThreeRenderer {
     const spec = MODELS[lookFor(theme).model];
     const token = ++this.modelToken[i];
     this.modelLoading[i] = true;
-    this.modelLoadStart[i] = performance.now();
+    // the render loop stamps the clock when it first draws the badge, so the
+    // loading timer shares one time base with everything else on screen
+    this.modelLoadStart[i] = 0;
     loadFighterModel(theme, spec, i)
       .then((model) => {
         if (this.modelToken[i] !== token) return;
@@ -1550,7 +1993,7 @@ export class ThreeRenderer {
           ? 1.35
           : 0.72
         : 0.85 + Math.sin(timeMs * 0.011 + f.side * 2) * 0.18;
-    rig.mats.accent.emissiveIntensity = charging ? 2.2 : maxed ? 1.5 : 1.0 * pulse;
+    rig.mats.accent.emissiveIntensity = charging ? 1.5 : maxed ? 1.05 : 0.75 * pulse;
 
     // blob shadow stays on the floor, shrinking as the fighter rises
     const shScale = Math.max(0.45, 1 - Math.abs(f.y) / 420);
@@ -1562,16 +2005,17 @@ export class ThreeRenderer {
     const flick = theme.auraStyle === "volt" ? pulse + Math.random() * 0.12 : pulse;
     const glowMat = rig.glow.material as THREE.SpriteMaterial;
     glowMat.color.set(theme.aura);
-    glowMat.opacity = 0.24 * power * flick;
-    rig.glow.scale.setScalar(250 + power * 90 + flick * 22);
+    glowMat.opacity = 0.13 * power * flick;
+    rig.glow.scale.setScalar(120 + power * 55 + flick * 14);
     rig.glow.position.y = p.pelvisY * d.height * 0.9;
     const ringMat = rig.ring.material as THREE.MeshBasicMaterial;
     ringMat.color.set(maxed ? theme.accent : theme.aura);
-    ringMat.opacity = 0.22 + power * 0.5;
+    ringMat.opacity = 0.1 + power * 0.3;
     rig.ring.scale.setScalar(1 + Math.sin(timeMs * 0.006 + f.side) * 0.07);
     rig.ring.position.y = -f.y + 2;
     rig.light.color.set(theme.aura);
-    rig.light.intensity = power * flick * 2.4;
+    // a faint warm spill on the deck, not a free-standing lamp
+    rig.light.intensity = power * flick * 1.05;
 
     // strike trails off the actual hitbox
     const mv = f.move;
@@ -1583,7 +2027,7 @@ export class ThreeRenderer {
         const reach = mv.reach * (0.45 + out * 0.7);
         const n = mv.ultimate ? 4 : 2;
         for (let i = 0; i < n; i++) {
-          const c = new THREE.Color(Math.random() < 0.6 ? theme.aura : theme.accent);
+          const c = scratchColor.set(Math.random() < 0.6 ? theme.aura : theme.accent);
           this.sparks[this.sparkIdx++ % SPARK_POOL] = {
             x: f.x + f.facing * reach,
             y: f.y + mv.hbY * 0.8 + (Math.random() - 0.5) * 24,
@@ -1603,8 +2047,8 @@ export class ThreeRenderer {
       }
     }
     // ambient aura motes
-    if (Math.random() < (charging ? 0.8 : 0.35)) {
-      const c = new THREE.Color(Math.random() < 0.7 ? theme.aura : theme.accent);
+    if (Math.random() < (charging ? 0.7 : 0.25)) {
+      const c = scratchColor.set(Math.random() < 0.7 ? theme.aura : theme.accent);
       const rise = theme.particle === "flake" || theme.particle === "shard";
       this.sparks[this.sparkIdx++ % SPARK_POOL] = {
         x: f.x + (Math.random() - 0.5) * 70,
@@ -1626,34 +2070,53 @@ export class ThreeRenderer {
 
   /* ------------------------------- projectiles ----------------------------- */
 
+  /**
+   * While a GLB is in flight the procedural rig is what is on screen, so a tag
+   * above that fighter says so and removes itself the moment the model lands.
+   * Nothing is allocated unless a load is genuinely pending.
+   */
   private syncModelLoadBadges(timeMs: number) {
     for (let i = 0; i < 2; i++) {
-      const loading = this.modelLoading[i];
-      if (!loading && this.modelLoadStart[i] === 0) continue;
-      if (!loading) {
+      let badge = this.modelLoadBadges[i];
+      if (!this.modelLoading[i]) {
+        if (!badge) continue;
+        this.scene.remove(badge);
+        badge.geometry.dispose();
+        (badge.material as THREE.Material).dispose();
+        this.modelLoadBadges[i] = null;
         this.modelLoadStart[i] = 0;
-        const badge = this.modelLoadBadges[i];
-        if (badge) {
-          this.scene.remove(badge);
-          this.modelLoadBadges[i] = null;
-        }
         continue;
       }
-      // show badge while loading
-      const badge = this.modelLoadBadges[i];
-      if (!badge) continue;
+      if (!badge) {
+        badge = new THREE.Mesh(
+          new THREE.PlaneGeometry(126, 31.5),
+          new THREE.MeshBasicMaterial({
+            map: loadingTexture(),
+            transparent: true,
+            depthTest: false,
+            depthWrite: false,
+            toneMapped: false,
+            opacity: 0.8,
+          }),
+        );
+        badge.renderOrder = 5;
+        this.scene.add(badge);
+        this.modelLoadBadges[i] = badge;
+        this.modelLoadStart[i] = timeMs;
+      }
       const elapsed = timeMs - this.modelLoadStart[i];
-      const pulse = 0.7 + Math.sin(elapsed * 0.008) * 0.3;
-      (badge.material as THREE.MeshBasicMaterial).opacity = pulse;
-      // position above fighter
-      const f = this.rigs[i];
-      badge.position.set(f.root.position.x, 180, f.root.position.z);
-      badge.lookAt(this.camera.position);
+      (badge.material as THREE.MeshBasicMaterial).opacity =
+        0.55 + Math.sin(elapsed * 0.006) * 0.25;
+      const rig = this.rigs[i];
+      badge.position.set(rig.root.position.x, 198, rig.root.position.z);
+      // billboard without a per-frame matrix rebuild
+      badge.quaternion.copy(this.camera.quaternion);
     }
   }
 
   private syncProjectiles(world: World, timeMs: number, dtS: number) {
-    const live = new Set<number>();
+    const live = this.liveProjectiles;
+    live.clear();
     for (const p of world.projectiles) {
       live.add(p.id);
       let g = this.projMeshes.get(p.id);
@@ -1689,7 +2152,7 @@ export class ThreeRenderer {
       g.scale.set(s, s, s);
       if (Math.random() < 0.85) {
         const theme = getCharacter(world.f[p.owner].charId);
-        const c = new THREE.Color(theme.accent);
+        const c = scratchColor.set(theme.accent);
         this.sparks[this.sparkIdx++ % SPARK_POOL] = {
           x: p.x - Math.sign(p.vx) * p.w,
           y: p.y + (Math.random() - 0.5) * p.w,

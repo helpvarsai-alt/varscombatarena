@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "verify:anim": "bun scripts/verify-animation.ts",
+    "verify:arena": "bun scripts/verify-arena.ts",
     "verify:models": "bun scripts/verify-models.ts",
     "manifest:models": "bun scripts/build-model-manifest.ts",
     "format": "prettier --write .",

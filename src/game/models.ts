@@ -98,8 +98,9 @@ export const LOOKS: Record<string, FighterLook> = {
   },
   // shadow — twin knives, no cape
   nyx: { model: "kk_Rogue", keep: ["Knife", "Knife_Offhand"], tint: 0.36 },
-  // the flowing one — hooded rogue silhouette, cape, no armor
-  tide: { model: "kk_Rogue_Hooded", keep: ["Rogue_Cape"], tint: 0.3 },
+  // the flowing one — same hooded silhouette as VOLT but capless and teal, so
+  // no two fighters ever share both a model and a loadout
+  tide: { model: "kk_Rogue_Hooded", keep: [], tint: 0.3 },
 };
 
 export function lookFor(theme: CharacterTheme): FighterLook {
@@ -288,6 +289,9 @@ function tintModel(
     for (const m of mats) {
       const std = m as THREE.MeshStandardMaterial;
       if (std.color) std.color.copy(tint);
+      // match the arena's procedural materials so a loaded fighter shades under
+      // the same room lighting as the fallback rig
+      if (std.isMeshStandardMaterial) std.envMapIntensity = 0.75;
     }
   });
 }

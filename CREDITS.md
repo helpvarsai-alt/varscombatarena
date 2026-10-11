@@ -19,7 +19,7 @@ Files are vendored unmodified and renamed with a `kk_` prefix:
 | `kk_Rogue_Hooded.glb` | VOLT | hooded, caped |
 | `kk_Knight.glb` | TERRA | full plate, round shield, sword |
 | `kk_Rogue.glb` | NYX | twin knives |
-| `kk_Knight.glb` | TIDE | same plate, no helm, no shield |
+| `kk_Rogue_Hooded.glb` | TIDE | hooded and capless, so no two fighters share a model *and* a loadout |
 
 Each file contains a 41-bone humanoid skeleton and 76 named animation clips.
 Every prop variant in the pack (five Knight shields, both axes, mug, hats,
@@ -37,3 +37,9 @@ Everything else — arena, crowd, impact FX, UI — is generated in code. The
 procedural fighter rig in `src/game/render3d.ts` is the instant-load stand-in
 that is shown until a skinned model arrives, and still renders the 2D mode's
 opponent if the model files cannot be fetched.
+
+The arena in `src/game/render3d.ts` is built as four depth tiers (deck, ringside,
+steel bays and columns, fogged skyline) out of procedural canvas textures. Its
+layout invariants — the deck top sitting on the simulation floor, the fight plane
+staying clear, and no geometry ever coming between the tracking camera and a
+fighter — are checked headlessly by `bun run verify:arena`.
